@@ -152,9 +152,10 @@ vite.config.ts.timestamp-*
 /data/
 /logs/
 /local/
-/held-*/
 /dist/
 /.dist-deny
 /.project-boards.json
+/scripts/publish.sh
+/scripts/release.sh
 /ecosystem.config.js
 /server-setup.sh

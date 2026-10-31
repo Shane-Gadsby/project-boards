@@ -8,6 +8,7 @@ Type=simple
 User=project-boards
 Group=project-boards
 EnvironmentFile=/etc/project-boards/project-boards.env
+Environment=PB_UPDATE_MODE=systemd
 ExecStart=/usr/bin/node /opt/project-boards/server.js
 Restart=on-failure
 RestartSec=2

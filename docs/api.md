@@ -73,7 +73,19 @@ token, then send `Authorization: Bearer <token>`.
 | GET | `{p}` | | the project with counts |
 | PATCH | `{p}` | any of `name`, `path`, `description`, `banner`, `maxSubagents` (clamped 0-10), `lanes` (array of names or `{id, name}`; ids are slugified), `busy` (`{"<lane>|all": "text"}`; `""` clears that lane) | the project |
 
-There is no delete for projects; remove `data/projects/<slug>/` on the server and restart.
+| POST | `{p}/archive`, `{p}/unarchive` | | The project, hidden and read-only until restored: writes answer 409. Sessions in `/wait` are woken. |
+| DELETE | `{p}` | `{confirm: "<slug>"}` | Permanently removes the project, its media and share links. A signed-in browser only. |
+
+The board's own `project-boards` project cannot be archived or deleted.
+
+## Updates
+
+A signed-in browser only: never an app token, and never with logins turned off.
+
+| | | | |
+|---|---|---|---|
+| GET | `/api/update` | `?force=1` skips the 10-minute cache | `{current, latest, available, notes, url, mode, status}` |
+| POST | `/api/update` | `{version}` | 202 `{started}`. Only the latest release, and only forwards. |
 
 ## Tasks
 

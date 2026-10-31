@@ -147,6 +147,6 @@ board. If your certificate comes from an internal CA, the machine's Node.js must
 |---|---|
 | Status and logs | `systemctl status project-boards`, `journalctl -u project-boards -f` |
 | Password, login mode | `project-boards-admin set-password`, `project-boards-admin status` |
-| Upgrade | Run the install command again. Settings and data are kept, the service restarts. This drops open pages and `pb wait` calls for a moment; both recover. |
+| Upgrade | Use the **Updates** button on the board when signed in, or run the install command again. Settings and data are kept, the service restarts. This drops open pages and `pb wait` calls for a moment; both recover. |
 | Back up | `/var/lib/project-boards` and `/etc/project-boards`. Plain files; a copy taken while it runs is fine for anything but the last few writes. |
 | Remove | `systemctl disable --now project-boards`, then delete `/opt/project-boards`, `/etc/project-boards`, `/etc/systemd/system/project-boards.service`, `/usr/local/sbin/project-boards-admin`, and the data if you mean to. |

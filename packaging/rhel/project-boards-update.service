@@ -1,0 +1,6 @@
+[Unit]
+Description=Install the Project Boards release the board asked for
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/project-boards-update

@@ -97,8 +97,11 @@ function idCompare(a, b) {
 async function loadProjects() {
 	state.projects = await api('GET', '/api/projects');
 	const sel = $('#project');
-	sel.innerHTML = state.projects.map((p) => `<option value="${esc(p.slug)}">${esc(p.name)}${p.counts.waiting ? ` (${p.counts.waiting})` : ''}</option>`).join('') +
-		'<option value="__add">+ Add a project...</option>';
+	const option = (p) => `<option value="${esc(p.slug)}">${esc(p.name)}${p.counts.waiting ? ` (${p.counts.waiting})` : ''}</option>`;
+	const active = state.projects.filter((p) => !p.archived);
+	const archived = state.projects.filter((p) => p.archived);
+	sel.innerHTML = active.map(option).join('') + '<option value="__add">+ Add a project...</option>' +
+		(archived.length ? `<optgroup label="Archived">${archived.map(option).join('')}</optgroup>` : '');
 	if (state.slug) {
 		sel.value = state.slug;
 	}
@@ -250,12 +253,31 @@ function connectEvents(reconnecting = false) {
 			if (state.openTask) {
 				openTask(state.openTask);
 			}
+		} else if (ev.type === 'project' && ev.action === 'delete') {
+			projectGone().catch(() => {});
 		} else if (ev.type === 'project' && ev.record) {
-			state.project = { ...state.project, ...ev.record };
+			state.project = { ...state.project, ...ev.record, archived: ev.record.archived };
 			scheduleRender('header');
 			scheduleRender('handoffs');
+			loadProjects().catch(() => {});
 		}
 	};
+}
+
+// This project was deleted, here or in another tab: move to another one.
+async function projectGone() {
+	if (state.es) {
+		state.es.close();
+		state.es = null;
+	}
+	await loadProjects();
+	const next = state.projects.filter((p) => !p.archived)[0];
+	if (next) {
+		await selectProject(next.slug);
+	} else {
+		location.hash = '';
+		location.reload();
+	}
 }
 
 function reconnectEvents() {
@@ -271,8 +293,12 @@ function reconnectEvents() {
 			if (!state.es) {
 				connectEvents(true);
 			}
-		} catch {
-			reconnectEvents();
+		} catch (e) {
+			if (e.status === 404) {
+				projectGone().catch(() => {});
+			} else {
+				reconnectEvents();
+			}
 		}
 	}, RETRY_MS);
 }
@@ -378,6 +404,8 @@ function renderHeader() {
 	banner.textContent = p.banner || '';
 	const active = [...state.tasks.values()].filter((t) => t.status === 'active');
 	$('#agents').textContent = `Sub-agents: up to ${p.maxSubagents}  |  ${active.length} being worked on`;
+	document.body.classList.toggle('archived', !!p.archived);
+	$('#archived-banner').hidden = !p.archived;
 }
 
 function renderTabs() {
@@ -775,7 +803,7 @@ async function init() {
 	if (!TABS.includes(state.tab)) {
 		state.tab = 'handoffs';
 	}
-	const slug = [r.slug, stored.slug].find((s) => s && state.projects.some((p) => p.slug === s)) || (state.projects[0] && state.projects[0].slug);
+	const slug = [r.slug, stored.slug].find((s) => s && state.projects.some((p) => p.slug === s)) || (state.projects.filter((p) => !p.archived)[0] && state.projects[0].slug);
 	renderTabs();
 	if (!slug) {
 		$('#tab-handoffs').hidden = true;
@@ -807,7 +835,50 @@ for (const b of $$('.tab')) {
 		renderTabs();
 	});
 }
-$('#open-settings').addEventListener('click', openSettings);
+$('#open-settings').addEventListener('click', () => {
+	openSettings();
+	$('#danger-zone').hidden = state.slug === 'project-boards';
+	$('#archive-project').textContent = state.project.archived ? 'Restore project' : 'Archive project';
+});
+
+async function setArchived(archived) {
+	await api('POST', P(archived ? '/archive' : '/unarchive'), {});
+	state.project = await api('GET', P());
+	await loadProjects();
+	renderHeader();
+	renderHandoffs();
+}
+$('#archive-project').addEventListener('click', () => {
+	$('#settings').close();
+	setArchived(!state.project.archived).catch((err) => alert(err.message));
+});
+$('#restore-project').addEventListener('click', () => setArchived(false).catch((err) => alert(err.message)));
+$('#open-delete-project').addEventListener('click', () => {
+	const n = (count, word) => `${count || 0} ${word}${count === 1 ? '' : 's'}`;
+	$('#delete-project-name').textContent = state.project.name;
+	$('#delete-project-counts').textContent = `${n(state.tasks.size, 'task')}, ${n(state.handoffs.size, 'hand-off')} and ${n(state.docs.size, 'doc')}`;
+	$('#delete-project-slug').textContent = state.slug;
+	$('#delete-project-form').confirm.value = '';
+	$('#delete-project-confirm').disabled = true;
+	$('#settings').close();
+	$('#delete-project').showModal();
+});
+$('#delete-project-form').confirm.addEventListener('input', (e) => {
+	$('#delete-project-confirm').disabled = e.target.value !== state.slug;
+});
+$('#delete-project-form').addEventListener('submit', async (e) => {
+	if (e.submitter && e.submitter.value === 'delete') {
+		const confirm = e.target.confirm.value;
+		e.preventDefault();
+		try {
+			await api('DELETE', P(), { confirm });
+			$('#delete-project').close();
+			await projectGone();
+		} catch (err) {
+			alert(err.message);
+		}
+	}
+});
 
 // ---------------------------------------------------------------------------------------------------------------
 // Docs: the list, the viewer (any version), the editor, history and share links
@@ -1155,12 +1226,67 @@ window.addEventListener('beforeunload', (e) => {
 // ---------------------------------------------------------------------------------------------------------------
 // Access: signing in and out, the login mode, app tokens and browser sessions
 
+let updateInfo = null;
+
+// Fills the Updates dialog, and marks the button when there is something new.
+async function checkUpdates(force) {
+	updateInfo = await api('GET', `/api/update${force ? '?force=1' : ''}`);
+	const u = updateInfo;
+	$('#open-updates').textContent = u.available ? 'Update available' : 'Updates';
+	$('#updates-summary').textContent = u.available ? `Version ${u.latest} is available. This server is on ${u.current}.` : `This server is up to date (${u.current}).`;
+	$('#updates-notes').hidden = !u.available;
+	$('#updates-notes').textContent = u.notes;
+	$('#updates-install').hidden = !u.available || !u.mode;
+	const detail = $('#updates-detail');
+	const failed = u.status && u.status.state === 'failed' && u.status.version === u.latest;
+	detail.hidden = !(failed || (u.available && !u.mode));
+	detail.textContent = failed ? `The last try failed${u.status.error ? `: ${u.status.error}` : '; see the server log'}.` : 'This server is not set up to update from the page. Rerun its install command.';
+}
+
+async function installUpdate() {
+	const version = updateInfo.latest;
+	if (!confirm(`Update this server to ${version}? It will restart, and open pages reconnect by themselves.`)) {
+		return;
+	}
+	const b = $('#updates-install');
+	b.disabled = true;
+	try {
+		const started = new Date().toISOString();
+		await api('POST', '/api/update', { version });
+		$('#updates-summary').textContent = `Updating to ${version}...`;
+		const deadline = Date.now() + 180000;
+		while (Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 3000));
+			const h = await fetch(`${BASE}/api/health`).then((r) => r.json()).catch(() => null);
+			if (h && h.version === version) {
+				location.reload();
+				return;
+			}
+			const now = h && (await api('GET', '/api/update').catch(() => null));
+			if (now && now.status && now.status.state === 'failed' && now.status.version === version && now.status.at > started) {
+				await checkUpdates(false);
+				$('#updates-summary').textContent = `The update to ${version} failed. This server is still on ${now.current}.`;
+				return;
+			}
+		}
+		$('#updates-summary').textContent = 'The update has not finished. Check the server log.';
+	} catch (e) {
+		$('#updates-summary').textContent = `Could not update: ${e.message}`;
+	} finally {
+		b.disabled = false;
+	}
+}
+
 async function renderSignInOut() {
 	const me = await api('GET', '/api/auth/me');
 	state.me = me;
 	const b = $('#sign-in-out');
 	b.hidden = me.mode === 'off';
 	b.textContent = me.signedIn && me.kind === 'session' ? 'Sign out' : 'Sign in';
+	$('#open-updates').hidden = !(me.signedIn && me.kind === 'session');
+	if (!$('#open-updates').hidden) {
+		checkUpdates(false).catch(() => {});
+	}
 	return me;
 }
 
@@ -1275,6 +1401,16 @@ function ruleBox(text) {
 	return ta;
 }
 
+$('#open-updates').addEventListener('click', () => {
+	$('#updates').showModal();
+	checkUpdates(true).catch((e) => {
+		$('#updates-summary').textContent = e.message;
+	});
+});
+$('#updates-check').addEventListener('click', () => checkUpdates(true).catch((e) => {
+	$('#updates-summary').textContent = e.message;
+}));
+$('#updates-install').addEventListener('click', installUpdate);
 $('#open-rules').addEventListener('click', () => openRules().catch((e) => alert(e.message)));
 $('#add-rule').addEventListener('click', () => {
 	const ta = ruleBox('');

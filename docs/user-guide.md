@@ -167,3 +167,18 @@ The **Access** dialog:
 
 The password itself is changed with `pb-admin set-password` (see [operations.md](operations.md#logins)), which signs
 every browser out.
+
+## Archiving and deleting a project
+
+In a project's settings (the gear):
+
+- **Archive project** hides it under **Archived** at the bottom of the project dropdown and makes it read-only. Sessions that
+  try to write to it are refused. Its share links keep working. **Restore** on its banner brings it back.
+- **Delete project** permanently removes its tasks, hand-offs, docs, history, media and share links, after you type its slug.
+  It works only from the page, while signed in, and it cannot be undone.
+
+## Updating the board
+
+When you are signed in, the **Updates** button shows whether GitHub has a newer release. It reads **Update available** when
+there is one. **Update now** installs it and restarts the server; open pages reconnect by themselves.
+

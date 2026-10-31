@@ -45,6 +45,14 @@ code { background: #eef0f4; padding: 1px 5px; border-radius: 4px; font-size: 12.
 @keyframes resync-spin { to { transform: rotate(360deg); } }
 .notify-bar { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; }
 .notify-bar .hint { margin: 0; }
+.archived-banner button { margin-left: 8px; padding: 2px 9px; }
+body.archived #banner, body.archived #add-task, body.archived .message-box { display: none; }
+body.archived .card textarea, body.archived .card input, body.archived .card button:not(.enlarge) { pointer-events: none; opacity: .6; }
+.top button { white-space: nowrap; }
+.update-notes { background: #f7f8fa; border-radius: 6px; padding: 8px; font-size: 12.5px; max-height: 240px; overflow: auto; white-space: pre-wrap; }
+.danger-zone { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; display: grid; gap: 8px; }
+button.danger { color: #b3261e; border-color: #e3b5b2; }
+button.danger:disabled { opacity: .45; cursor: not-allowed; }
 .banner { background: var(--warn-soft); border-bottom: 1px solid #efd9ad; padding: 7px 16px; }
 
 main { padding: 16px; max-width: 1500px; margin: 0 auto; }

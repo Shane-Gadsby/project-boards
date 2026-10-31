@@ -15,10 +15,11 @@ const { createAuth } = require('./lib/auth');
 const { depsText } = require('./lib/deps-guide');
 const { installScript } = require('./lib/install');
 const { upgradeText } = require('./lib/upgrade-guide');
+const { createUpdater } = require('./lib/updater');
 const { createDocs, RAW_TYPES, SANDBOX_CSP } = require('./lib/docs');
 const { deriveStatus, resolutionOf, firstWord, STATUSES } = require('./lib/status');
 
-const VERSION = '1.8.1';
+const VERSION = '1.9.0';
 const ROOT = __dirname;
 const PORT = Number(process.env.PB_PORT || 4780);
 const HOST = process.env.PB_HOST || '0.0.0.0';
@@ -66,15 +67,23 @@ function cliInfo() {
 // What this server stamps into the pb it publishes: the address pb treats as home (and upgrades from), and a LAN address
 // if it has one. From the environment, else data/publish.json; with
 // neither, the address the download came in on. One source, so no server's copy names another's.
-function publishSettings() {
-	let f = {};
+function readPublishFile() {
 	try {
-		f = JSON.parse(fs.readFileSync(path.join(DATA, 'publish.json'), 'utf8'));
+		return JSON.parse(fs.readFileSync(path.join(DATA, 'publish.json'), 'utf8'));
 	} catch {
-		// optional
+		return {}; // optional
 	}
+}
+
+function publishSettings() {
+	const f = readPublishFile();
 	return { url: process.env.PB_PUBLIC_URL || f.url || '', lan: process.env.PB_LAN_URL || f.lan || '' };
 }
+
+const updater = createUpdater({
+	root: ROOT, dataDir: DATA, version: VERSION, httpError: (...a) => httpError(...a),
+	mode: () => process.env.PB_UPDATE_MODE || readPublishFile().update || '',
+});
 
 function cliFor(req) {
 	const c = cliInfo();
@@ -161,10 +170,55 @@ function normalizeProject(p) {
 		lanes: Array.isArray(p.lanes) ? p.lanes.filter((l) => l && typeof l.id === 'string') : [],
 		banner: p.banner || '',
 		busy: p.busy && typeof p.busy === 'object' ? p.busy : {},
+		...(p.archived ? { archived: p.archived } : {}),
 		created: p.created || now(),
 		updated: p.updated || now(),
 		version: p.version || 1,
 	};
+}
+
+function protectSystem(proj) {
+	if (proj.meta.slug === SYSTEM_SLUG) {
+		throw httpError(400, 'this is the board\'s own project, which it needs: it cannot be archived or deleted');
+	}
+}
+
+function setArchived(proj, archived, actor) {
+	protectSystem(proj);
+	const m = { ...proj.meta };
+	delete m.archived;
+	if (archived) {
+		m.archived = proj.meta.archived || now();
+	}
+	m.updated = now();
+	m.version += 1;
+	proj.meta = m;
+	saveProject(proj);
+	logEvent(proj, { type: 'project', action: archived ? 'archive' : 'unarchive', actor, record: m });
+	wakeWaiters(proj); // nobody should sleep on a project that has stopped
+	return projectSummary(proj);
+}
+
+// Permanent: the project's folder goes, with its tasks, hand-offs, docs, history and media. Back up first if in doubt.
+function deleteProject(proj) {
+	protectSystem(proj);
+	const { slug } = proj.meta;
+	const removed = { tasks: proj.tasks.size, handoffs: proj.handoffs.size, docs: proj.docs.size };
+	projects.delete(slug);
+	wakeWaiters(proj);
+	broadcast(slug, { type: 'project', action: 'delete', id: slug });
+	for (const res of sseClients.get(slug) || []) {
+		res.end();
+	}
+	sseClients.delete(slug);
+	docs.removeProject(slug);
+	if (watchers[slug]) {
+		delete watchers[slug];
+		saveWatchers([]);
+	}
+	fs.rmSync(projectDir(slug), { recursive: true, force: true });
+	console.log(`${now()} deleted project ${slug}: ${JSON.stringify(removed)}`);
+	return { deleted: slug, ...removed };
 }
 
 function clampInt(v, lo, hi, dflt) {
@@ -1045,6 +1099,18 @@ async function route(req, res) {
 		if (a === 'auth') {
 			return authRoute(req, res, url, method, who, parts.slice(2));
 		}
+		// A signed-in browser only: never an app token, and never with logins off, when nobody is signed in.
+		if (a === 'update' && !slug) {
+			userOnly(actor);
+			needSession(who);
+			if (method === 'GET') {
+				return send(res, 200, await updater.check(url.searchParams.get('force') === '1'));
+			}
+			if (method === 'POST') {
+				const body = await readBody(req);
+				return send(res, 202, await updater.start(String(body.version || '')));
+			}
+		}
 		if (a === 'status-of' && method === 'POST') {
 			const body = await readBody(req);
 			return send(res, 200, { statuses: (Array.isArray(body.states) ? body.states : []).map((s) => deriveStatus(s)) });
@@ -1150,6 +1216,24 @@ async function route(req, res) {
 		}
 		if (a === 'projects' && slug) {
 			const proj = getProject(slug);
+			if (b === 'archive' || b === 'unarchive') {
+				if (method !== 'POST' || id) {
+					throw httpError(404, `no route ${method} ${url.pathname}`);
+				}
+				return send(res, 200, setArchived(proj, b === 'archive', actor));
+			}
+			if (!b && method === 'DELETE') {
+				userOnly(actor);
+				const body = await readBody(req);
+				if (body.confirm !== slug) {
+					throw httpError(400, `send {confirm: "${slug}"} to delete this project`);
+				}
+				return send(res, 200, deleteProject(proj));
+			}
+			// Archived means read-only, so a session still working in it finds out rather than losing its writes.
+			if (proj.meta.archived && method !== 'GET') {
+				throw httpError(409, `project "${slug}" is archived: restore it on the board first`);
+			}
 			if (!b) {
 				if (method === 'GET') {
 					return send(res, 200, projectSummary(proj));

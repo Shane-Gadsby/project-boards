@@ -1,0 +1,9 @@
+[Unit]
+Description=Project Boards update requests
+
+[Path]
+PathExists=/var/lib/project-boards/update/request
+Unit=project-boards-update.service
+
+[Install]
+WantedBy=multi-user.target

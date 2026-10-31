@@ -20,12 +20,14 @@
 	<span class="agents" id="agents" title="Sub-agents this project may run at once"></span>
 	<span class="conn" id="conn" title="Live connection to the server"></span>
 	<button class="icon" id="resync" title="Reload this project from the server" aria-label="Reload this project from the server">&#8635;</button>
+	<button id="open-updates" title="Check for a new version" hidden>Updates</button>
 	<button id="open-rules" title="Rules for every project">Rules</button>
 	<button id="open-access" title="Logins: who and what can use the boards">Access</button>
 	<button id="sign-in-out" hidden></button>
 	<button class="icon" id="open-settings" title="Project settings" aria-label="Project settings">&#9881;</button>
 </header>
 <div class="banner" id="banner" hidden></div>
+<div class="banner archived-banner" id="archived-banner" hidden>This project is archived and read-only. <button id="restore-project">Restore</button></div>
 <main>
 	<section id="tab-handoffs" class="tabpane" hidden>
 		<div class="message-box">
@@ -92,6 +94,10 @@
 			<div class="enrol-row">Enrol a new project from scratch:</div>
 			<code class="enrol-url"></code> <button type="button" class="copy-enrol">Copy</button>
 		</div>
+		<div class="danger-zone" id="danger-zone">
+			<div><button type="button" id="archive-project">Archive project</button> <small>Hides it and makes it read-only. You can restore it.</small></div>
+			<div><button type="button" id="open-delete-project" class="danger">Delete project...</button> <small>Permanent.</small></div>
+		</div>
 		<menu><button value="cancel" formnovalidate>Cancel</button><button value="save" class="primary">Save</button></menu>
 	</form>
 </dialog>
@@ -141,6 +147,23 @@
 	</form>
 </dialog>
 
+<dialog id="updates">
+	<form method="dialog">
+		<h2>Updates</h2>
+		<p id="updates-summary">Checking...</p>
+		<pre id="updates-notes" class="update-notes" hidden></pre>
+		<p class="hint" id="updates-detail" hidden></p>
+		<menu><button type="button" id="updates-check">Check again</button><button value="cancel">Close</button><button type="button" id="updates-install" class="primary" hidden>Update now</button></menu>
+	</form>
+</dialog>
+<dialog id="delete-project">
+	<form method="dialog" id="delete-project-form">
+		<h2>Delete <span id="delete-project-name"></span>?</h2>
+		<p>This permanently deletes <strong id="delete-project-counts"></strong>, with all history, media and share links. It cannot be undone.</p>
+		<label>Type <code id="delete-project-slug"></code> to confirm <input name="confirm" autocomplete="off" spellcheck="false"></label>
+		<menu><button value="cancel" formnovalidate>Cancel</button><button value="delete" class="danger" id="delete-project-confirm" disabled>Delete permanently</button></menu>
+	</form>
+</dialog>
 <dialog id="add-project">
 	<form method="dialog" id="add-project-form">
 		<h2>Add a project</h2>

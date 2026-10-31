@@ -67,6 +67,7 @@ baseline live). The server comes from `PB_URL`, else `.project-boards.json` (`pb
 | Command | Does |
 |---|---|
 | `pb self-update [--check] [--yes]` | Checks GitHub releases and, if the user agrees, installs a newer `pb`, checked against the release's checksum and keeping this copy's home server. With no terminal it stops and says to ask the user: pass `--yes` only once they have agreed. `pb upgrade` updates from the board instead. |
+| `pb archive`, `pb unarchive` | Archives this project (hidden and read-only) or restores it. Do this only when the user asks. Deleting a project is only possible on the board page. |
 | `pb ensure` | Exit 0 when the board answers (or its LAN address does). Otherwise exit 2: tell the user the board is unreachable. pb never restarts a server. |
 | `pb login [--name <n>] [--no-browser]` | Signs this machine in through the browser (above). `--name` replaces "pb" in the token's name; `--no-browser` only prints the link. |
 | `pb logout` / `pb whoami` | Revoke and forget this machine's token / show who the server sees and the login mode. |

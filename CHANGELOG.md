@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.9.0 (2026-11-01)
+
+- Projects can be archived (hidden, read-only, restorable; `pb archive`, `pb unarchive`) and deleted (permanent, from a
+  signed-in browser only, after typing the slug).
+- **Updates** on the page: signed in, check GitHub for a new release and install it. On the reference install a root
+  systemd unit installs it; elsewhere `inplace` mode replaces the files under a process manager.
+- Fixed: rerunning the installer on a server using a copied Node.js could lose it.
+
 ## 1.8.1 (2026-11-01)
 
 - The `pb` installer says when its folder is not on `PATH`, and the RHEL guide explains where `pb` belongs.

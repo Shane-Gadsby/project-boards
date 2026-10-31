@@ -45,7 +45,7 @@ cp -r "$HERE/server.js" "$HERE/lib" "$HERE/public" "$HERE/bin" "$HERE/docs" "$HE
 NODE_REAL=$(readlink -f "$NODE_OK")
 NODE_BIN=$NODE_OK
 case "$NODE_REAL" in
-	/root/* | /home/*) COPY_NODE=1 ;;
+	/root/* | /home/* | "$APP"/*) COPY_NODE=1 ;; # the last: this install is about to replace $APP
 	*) if runuser -u project-boards -- "$NODE_REAL" --version >/dev/null 2>&1; then COPY_NODE=0; else COPY_NODE=1; fi ;;
 esac
 if [ "$COPY_NODE" = 1 ]; then
@@ -84,7 +84,15 @@ exec runuser -u project-boards -- env PB_DATA=/var/lib/project-boards $NODE_BIN 
 SCRIPT
 chmod 755 /usr/local/sbin/project-boards-admin
 
+# Updating from the board's page: the service asks by writing a file, and this root unit installs that release.
+install -d -m 755 /var/lib/project-boards-updater
+install -d -o project-boards -g project-boards -m 750 /var/lib/project-boards/update
+install -m 755 "$HERE/packaging/rhel/install-server.sh" /usr/local/sbin/project-boards-install-server
+sed "s|@NODE@|$NODE_BIN|" "$HERE/packaging/rhel/project-boards-update" >/usr/local/sbin/project-boards-update
+chmod 755 /usr/local/sbin/project-boards-update
+install -m 644 "$HERE/packaging/rhel/project-boards-update.service" "$HERE/packaging/rhel/project-boards-update.path" /etc/systemd/system/
 systemctl daemon-reload
+systemctl enable --now project-boards-update.path >/dev/null 2>&1
 systemctl enable project-boards >/dev/null 2>&1
 if [ "${NEW_CONFIG:-0}" = 1 ]; then
 	echo "Installed $(cat "$APP/VERSION"). Next: set PB_PUBLIC_URL in $ETC/project-boards.env, run"

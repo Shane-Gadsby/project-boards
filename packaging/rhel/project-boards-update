@@ -1,0 +1,23 @@
+#!/bin/sh
+# Installs the release the board asked for. Run as root by project-boards-update.service. The request comes from the
+# service user, so it is treated as untrusted: it must be a plain version number, and the installer checks the download.
+STATUS_DIR=/var/lib/project-boards-updater
+REQUEST=/var/lib/project-boards/update/request
+status() {
+	printf '{"state":"%s","version":"%s","at":"%s"}\n' "$1" "$VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$STATUS_DIR/status.json.tmp"
+	chmod 644 "$STATUS_DIR/status.json.tmp"
+	mv -f "$STATUS_DIR/status.json.tmp" "$STATUS_DIR/status.json"
+}
+[ -f "$REQUEST" ] && [ ! -L "$REQUEST" ] || exit 0
+VERSION=$(head -c 32 "$REQUEST" | head -n 1)
+rm -f "$REQUEST"
+case "$VERSION" in
+	*[!0-9.]* | "" | .* | *.) VERSION=invalid; status failed; exit 1 ;;
+esac
+status running
+if PB_VERSION="$VERSION" NODE="@NODE@" sh /usr/local/sbin/project-boards-install-server; then
+	status done
+else
+	status failed
+	exit 1
+fi

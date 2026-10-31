@@ -24,6 +24,7 @@ Server, from its environment (restart to apply):
 | `PB_PUBLIC_URL` | the address a request came in on, sub-path included | The address stamped into the `pb` this server publishes. `pb` treats it as home and upgrades from it. |
 | `PB_LAN_URL` | (none) | A second address, stamped too; `pb` falls back to it when the main one fails. |
 | `PB_BASE_PATH` | (none) | A sub-path to answer on as well as the root, such as `/projects`. See below. |
+| `PB_UPDATE_MODE` | (none) | How the page installs updates: `systemd` or `inplace`. See below. |
 | `PB_PORT` | 4780 | Port. |
 | `PB_HOST` | 0.0.0.0 | Interface. Use `127.0.0.1` behind a local proxy. |
 | `PB_DATA` | `./data` | Data folder. |
@@ -35,6 +36,23 @@ Server, from its environment (restart to apply):
 
 Clients: `PB_URL`, `PB_PROJECT`, `PB_TOKEN` (a token instead of `pb login`'s saved one), `XDG_CONFIG_HOME` (see
 [claude-sessions.md](claude-sessions.md)).
+
+## Updating from the page
+
+Signed in, the **Updates** button checks GitHub for a newer release and installs it. It needs a browser session: `pb`, app
+tokens and a board with logins off cannot use it.
+
+How it installs depends on how the server runs:
+
+| `PB_UPDATE_MODE` | What happens |
+|---|---|
+| `systemd` | Set by the reference install. The service cannot write its own code, so it writes the version to a request file, and a root unit (`project-boards-update.path`) installs that release with the normal installer, which checks the checksum. |
+| `inplace` | The server replaces its own files and exits, so a process manager must restart it, and its folder must be writable. |
+| (unset) | The page only reports new versions. |
+
+`update` in `<data>/publish.json` can set the mode instead. The server must be able to reach GitHub. The page cannot go
+backwards, or install anything but the latest published release. Take a backup first if the data matters: an update does not
+make one.
 
 ## Serving from a sub-directory
 

@@ -68,6 +68,33 @@ check "self-update --yes" "$PB" self-update --yes
 check "now the new version" sh -c "\"$PB\" version --local | grep -q $NEW"
 check "kept its home server" grep -q "^const DEFAULT_SERVER = '$BASE';" "$PB"
 check "pb still runs" "$PB" tasks
+# Archive and delete.
+unset PB_RELEASES_URL
+J='Content-Type: application/json'
+code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+same() { # <what> <want> <got>
+	if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: wanted $2, got $3"; exit 1; fi
+}
+cd "$WORK/repo"
+check "add a project to remove" "$PB" register gone --name Gone
+same "share a doc" 201 "$(code -X POST "$BASE/api/projects/gone/docs" -H "$J" -d '{"id":"d","title":"D","format":"text","content":"x"}')"
+check "archive" "$PB" archive --project gone
+check "hidden from the list" sh -c "! \"$PB\" projects | grep -q '^gone'"
+check "listed with --all" sh -c "\"$PB\" projects --all | grep -q 'archived.*gone'"
+if "$PB" add --title nope --project gone >"$WORK/out" 2>&1; then echo "FAIL wrote to an archived project"; exit 1; fi
+has "writes refused" "is archived"
+same "still readable" 200 "$(code "$BASE/api/projects/gone/tasks")"
+check "restore" "$PB" unarchive --project gone
+check "writes work again" "$PB" add --title back --project gone
+same "delete refused without the user" 403 "$(code -X DELETE "$BASE/api/projects/gone" -H "$J" -d '{"confirm":"gone"}')"
+same "delete refused without the slug" 400 "$(code -X DELETE "$BASE/api/projects/gone" -H "$J" -H 'X-PB-Actor: user' -d '{"confirm":"nope"}')"
+same "own project cannot go" 400 "$(code -X DELETE "$BASE/api/projects/project-boards" -H "$J" -H 'X-PB-Actor: user' -d '{"confirm":"project-boards"}')"
+same "delete" 200 "$(code -X DELETE "$BASE/api/projects/gone" -H "$J" -H 'X-PB-Actor: user' -d '{"confirm":"gone"}')"
+same "gone" 404 "$(code "$BASE/api/projects/gone")"
+check "its folder is gone" sh -c "[ ! -e \"$WORK/data/projects/gone\" ]"
+same "updates need a signed-in browser" 401 "$(code "$BASE/api/update" -H 'X-PB-Actor: user')"
+same "and so does installing one" 401 "$(code -X POST "$BASE/api/update" -H "$J" -H 'X-PB-Actor: user' -d '{"version":"9.9.9"}')"
+
 # A sub-path, alongside the root.
 SUB=$((PORT + 2))
 PB_AUTH=off PB_HOST=127.0.0.1 PB_PORT=$SUB PB_DATA="$WORK/data2" PB_BASE_PATH=/projects node "$ROOT/server.js" >"$WORK/sub.log" 2>&1 &
@@ -76,7 +103,6 @@ i=0; until curl -fsS "http://127.0.0.1:$SUB/projects/api/health" >/dev/null 2>&1
 check "page under the sub-path" sh -c "curl -fsS http://127.0.0.1:$SUB/projects/ | grep -q 'src=\"/projects/app.js\"'"
 check "page at the root" sh -c "curl -fsS http://127.0.0.1:$SUB/ | grep -q 'src=\"/app.js\"'"
 check "assets under the sub-path" curl -fsS "http://127.0.0.1:$SUB/projects/app.js"
-unset PB_RELEASES_URL
 mkdir -p "$WORK/subrepo"; cd "$WORK/subrepo"
 check "pb use with a sub-path" "$PB" use "http://127.0.0.1:$SUB/projects" --project sub
 check "register there" "$PB" register sub --name Sub --path "$WORK/subrepo"

@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 // Bump on every change: the server reads this line to publish the version (GET /api/pb), and pb upgrade compares it.
-const VERSION = '1.8.1';
+const VERSION = '1.9.0';
 
 // Where pb self-update looks: the latest published release, which has pb and pb.sha256 attached. Drafts and pre-releases
 // are not offered.
@@ -84,7 +84,9 @@ contains the current directory.
   pb version [--local]              this pb's version, and whether the server has a newer one
   pb self-update [--check] [--yes]  check GitHub releases and, if the user agrees, install a newer pb
   pb upgrade [--force]              install the server's pb over this one (checked against its sha256)
-  pb projects                       list registered projects
+  pb projects [--all]               list registered projects (--all: archived ones too)
+  pb archive                        archive this project: hidden and read-only until restored
+  pb unarchive                      restore it (deleting a project is only possible on the board page)
   pb register <slug> --name <name> [--path <dir>] [--lanes "PC1,PC2"] [--max-subagents N] [--description <text>]
   pb settings                       show this project's settings (maxSubagents, lanes, banner, busy)
   pb set [--max-subagents N] [--banner <text>] [--lanes "a,b"] [--name <n>] [--path <dir>]
@@ -1059,10 +1061,17 @@ async function main() {
 			await upgrade(o);
 			return;
 		case 'projects':
-			for (const p of await api('GET', '/api/projects')) {
-				console.log(`${pad(p.slug, 22)} ${pad(p.name, 28)} subagents<=${p.maxSubagents}  todo ${p.counts.todo} active ${p.counts.active} done ${p.counts.done}  inbox ${p.counts.inbox}  ${p.path}`);
+			for (const p of (await api('GET', '/api/projects')).filter((x) => o.all || !x.archived)) {
+				console.log(`${p.archived ? '[archived] ' : ''}${pad(p.slug, 22)} ${pad(p.name, 28)} subagents<=${p.maxSubagents}  todo ${p.counts.todo} active ${p.counts.active} done ${p.counts.done}  inbox ${p.counts.inbox}  ${p.path}`);
 			}
 			return;
+		case 'archive':
+		case 'unarchive': {
+			const slug = await resolveProject(o);
+			await api('POST', `/api/projects/${enc(slug)}/${cmd}`, {});
+			console.log(`${slug}: ${cmd}d`);
+			return;
+		}
 		case 'register': {
 			const slug = o._[0];
 			if (!slug) {
