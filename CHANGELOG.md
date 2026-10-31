@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.9.1 (2026-11-01)
+
+- Fixed: checking for and installing updates failed behind a proxy. The server and `pb self-update` now use `curl`, which
+  honours `https_proxy` and `no_proxy`, and the services read `/etc/environment`.
+
 ## 1.9.0 (2026-11-01)
 
 - Projects can be archived (hidden, read-only, restorable; `pb archive`, `pb unarchive`) and deleted (permanent, from a

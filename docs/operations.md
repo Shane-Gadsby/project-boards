@@ -50,7 +50,9 @@ How it installs depends on how the server runs:
 | `inplace` | The server replaces its own files and exits, so a process manager must restart it, and its folder must be writable. |
 | (unset) | The page only reports new versions. |
 
-`update` in `<data>/publish.json` can set the mode instead. The server must be able to reach GitHub. The page cannot go
+`update` in `<data>/publish.json` can set the mode instead. The server must be able to reach GitHub. It does that with `curl`, which uses `https_proxy` and `no_proxy`, so through a proxy it
+needs those in its environment. The reference install reads them from `/etc/environment` and its env file; settings in a
+shell profile do not reach a service. The page cannot go
 backwards, or install anything but the latest published release. Take a backup first if the data matters: an update does not
 make one.
 

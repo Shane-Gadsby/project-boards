@@ -3,4 +3,6 @@ Description=Install the Project Boards release the board asked for
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/environment
+EnvironmentFile=-/etc/project-boards/project-boards.env
 ExecStart=/usr/local/sbin/project-boards-update

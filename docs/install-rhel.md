@@ -39,6 +39,9 @@ cd project-boards-<version>
 ./install.sh
 ```
 
+Behind a proxy, `curl` uses `https_proxy` from your shell. For the board's **Updates** button, the service needs it too: put
+`https_proxy` and `no_proxy` in `/etc/environment` or `/etc/project-boards/project-boards.env`, then restart the service.
+
 The installer uses Node.js 18 or newer from `NODE`, then `PATH`, then `/usr/local/bin` and `/usr/bin`, then nvm's versions
 (root's, and the `sudo` user's), newest first. The service runs the one it found.
 
