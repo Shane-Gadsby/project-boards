@@ -6,7 +6,7 @@
 browser (the user)          Claude Code sessions
    |  page, SSE (cookie)        |  pb (HTTP + app token; installed from /install), pb ensure (HTTP)
    v                            v
-   https://boards.example.com  ->  a TLS proxy (nginx, for example)
+   https://boards.example.com  ->  a TLS proxy (HAProxy, for example)
    http://192.0.2.10:4780 (LAN, direct; pb's optional fallback)     |
                                                                     v
         server.js on port 4780
@@ -32,7 +32,7 @@ browser (the user)          Claude Code sessions
 | `public/index.html`, `app.js`, `style.css` | The page. Plain script, no build step, light theme. |
 | `bin/pb` | The command line for sessions (Node, `fetch`); one file, published by the server at `/pb`. |
 | `bin/pb-admin` | The owner's password and login mode; writes `data/auth-admin.json` (run where the data folder is). |
-| `packaging/rhel/` | systemd service, environment file, nginx example and installer for a new server. |
+| `packaging/rhel/` | systemd service, environment file, HAProxy example and installer for a new server. |
 | `docs/` | This documentation. |
 
 ## Server internals

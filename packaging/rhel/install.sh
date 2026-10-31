@@ -75,7 +75,8 @@ if [ ! -f "$ETC/project-boards.env" ]; then
 fi
 sed "s|^ExecStart=.*|ExecStart=$NODE_BIN $APP/server.js|" "$HERE/packaging/rhel/project-boards.service" >/etc/systemd/system/project-boards.service
 chmod 644 /etc/systemd/system/project-boards.service
-install -m 644 "$HERE/packaging/rhel/nginx-project-boards.conf" "$ETC/nginx-project-boards.conf.example"
+rm -f "$ETC/nginx-project-boards.conf.example"
+install -m 644 "$HERE/packaging/rhel/haproxy-project-boards.cfg" "$ETC/haproxy-project-boards.cfg.example"
 cat > /usr/local/sbin/project-boards-admin <<SCRIPT
 #!/bin/sh
 # The board's password and login mode, as the service user, on the service's data.

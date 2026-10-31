@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.7.2 (2026-11-01)
+
+- The bundle and the RHEL guide use HAProxy instead of nginx for TLS.
+
 ## 1.7.1 (2026-11-01)
 
 - One-line server install from the latest release: `install-server.sh`, attached to each release, downloads the bundle,

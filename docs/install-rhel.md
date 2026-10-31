@@ -61,23 +61,57 @@ curl -s http://127.0.0.1:4780/api/health
 
 Logins are required from the start (`PB_AUTH=required`).
 
-## 4. TLS with nginx
+## 4. TLS with HAProxy
 
 The server speaks plain HTTP, so anything beyond one machine should go through a TLS proxy: passwords and tokens would
 otherwise cross the network in the clear.
 
 ```bash
-dnf install -y nginx
-cp /etc/project-boards/nginx-project-boards.conf.example /etc/nginx/conf.d/project-boards.conf
-# set server_name and the certificate paths in that file
-setsebool -P httpd_can_network_connect 1   # SELinux: lets nginx connect to the service's port
-firewall-cmd --permanent --add-service=https --add-service=http
-firewall-cmd --reload
-systemctl enable --now nginx
+dnf install -y haproxy
+mkdir -p /etc/haproxy/certs /etc/haproxy/conf.d
+cat your-certificate-chain.crt your-private.key > /etc/haproxy/certs/boards.example.com.pem
+chmod 600 /etc/haproxy/certs/boards.example.com.pem
 ```
 
-The proxy must keep long responses open and unbuffered: the shipped file does. A different proxy needs the same, and must
-pass `X-Forwarded-Proto` and `X-Forwarded-Host`.
+Save this as `/etc/haproxy/conf.d/project-boards.cfg`, with your certificate's path:
+
+```haproxy
+# /etc/haproxy/conf.d/project-boards.cfg: TLS in front of Project Boards. Set the certificate path.
+# The PEM file holds the certificate chain and the private key together.
+frontend project_boards
+	mode http
+	bind *:80
+	bind *:443 ssl crt /etc/haproxy/certs/boards.example.com.pem
+	http-request redirect scheme https code 301 unless { ssl_fc }
+	http-request set-header X-Forwarded-Proto https
+	http-request set-header X-Forwarded-Host %[req.hdr(host)]
+	option forwardfor
+	# Live page updates and pb wait hold a response open.
+	timeout client 3700s
+	default_backend project_boards
+
+backend project_boards
+	mode http
+	option httpchk GET /api/health
+	timeout server 3700s
+	server app 127.0.0.1:4780 check
+```
+
+Then check it and start HAProxy:
+
+```bash
+haproxy -c -f /etc/haproxy/haproxy.cfg -f /etc/haproxy/conf.d
+setsebool -P haproxy_connect_any 1   # SELinux: lets HAProxy connect to the service's port
+firewall-cmd --permanent --add-service=https --add-service=http
+firewall-cmd --reload
+systemctl enable --now haproxy
+```
+
+RHEL's stock `/etc/haproxy/haproxy.cfg` has a sample `main` frontend on port 5000 whose servers do not exist, so the log
+reports them as down. That is harmless, and you can remove the sample.
+
+The proxy must keep long responses open: this file does, with one-hour client and server timeouts. A different
+proxy needs the same, and must pass `X-Forwarded-Proto` and `X-Forwarded-Host`.
 
 Without a proxy, for a trial on a trusted network: set `PB_HOST=0.0.0.0`, then
 `firewall-cmd --permanent --add-port=4780/tcp && firewall-cmd --reload`.
