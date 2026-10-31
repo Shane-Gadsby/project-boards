@@ -19,6 +19,8 @@ has() { # <what> <text>
 }
 
 for f in "$ROOT"/server.js "$ROOT"/lib/*.js "$ROOT"/public/*.js; do node --check "$f"; done
+sh -n "$ROOT/packaging/rhel/install.sh"
+sh -n "$ROOT/packaging/rhel/install-server.sh"
 cp "$ROOT/bin/pb" "$WORK/pb.check.js" && node --check "$WORK/pb.check.js" && rm "$WORK/pb.check.js"
 
 PB_AUTH=off PB_HOST=127.0.0.1 PB_PORT=$PORT PB_DATA="$WORK/data" PB_PUBLIC_URL=$BASE node "$ROOT/server.js" >"$WORK/server.log" 2>&1 &

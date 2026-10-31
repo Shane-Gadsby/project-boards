@@ -50,4 +50,4 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           gh release create "v$VERSION" --draft --target "$GITHUB_SHA" --title "v$VERSION" --notes-file dist/notes.md \
-            "dist/project-boards-$VERSION.tar.gz" "dist/project-boards-$VERSION.tar.gz.sha256" dist/pb dist/pb.sha256
+            "dist/project-boards-$VERSION.tar.gz" "dist/project-boards-$VERSION.tar.gz.sha256" dist/pb dist/pb.sha256 packaging/rhel/install-server.sh

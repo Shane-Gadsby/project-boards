@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.7.1 (2026-11-01)
+
+- One-line server install from the latest release: `install-server.sh`, attached to each release, downloads the bundle,
+  checks its checksum, unpacks it and runs `install.sh`.
+- Fixed: `install.sh` only looked at `/usr/bin/node`, so it refused a machine with an old one there and a newer one on the
+  `PATH`. It now uses `NODE` if set, then `PATH`, then the usual places, then nvm's versions, and runs the service with the Node.js it found.
+  One in a home folder, like nvm's, is copied into `/opt/project-boards/runtime`, because the service cannot read it there.
+
 ## 1.7.0 (2026-11-01)
 
 - `pb self-update`: checks GitHub releases, shows what is new, asks, and replaces itself if you accept. It checks the

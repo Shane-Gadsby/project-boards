@@ -18,16 +18,32 @@ node --version
 The server needs no compiler, npm packages or outside network access. An offline machine only needs these packages from
 its local mirror, and the bundle copied to it.
 
-## 2. Install the bundle
+## 2. Install
 
-Get `project-boards-<version>.tar.gz` from whoever runs your distribution (it is built by `scripts/make-dist.sh`), check it
-against its `.sha256`, and run:
+As root, this downloads the latest release, checks its checksum, unpacks it and runs its installer:
 
 ```bash
+curl -fsSL https://github.com/Shane-Gadsby/project-boards/releases/latest/download/install-server.sh | sh
+```
+
+With `sudo`, pipe it to `sudo sh` instead.
+
+Run it again to upgrade. For one version, set `PB_VERSION=1.7.1`, on the `sh` side of the pipe.
+
+Without internet access, copy over `project-boards-<version>.tar.gz` from the release page and its `.sha256`, then:
+
+```bash
+sha256sum -c project-boards-<version>.tar.gz.sha256
 tar xzf project-boards-<version>.tar.gz
 cd project-boards-<version>
 ./install.sh
 ```
+
+The installer uses Node.js 18 or newer from `NODE`, then `PATH`, then `/usr/local/bin` and `/usr/bin`, then nvm's versions
+(root's, and the `sudo` user's), newest first. The service runs the one it found.
+
+**With nvm:** the service cannot read a home folder, so the installer copies that Node.js to
+`/opt/project-boards/runtime/node`. `nvm use` does not affect the service; run the installer again to move it to a newer one.
 
 This puts the code in `/opt/project-boards` (root-owned; the service cannot change it), creates the `project-boards` user,
 installs `project-boards.service`, and adds `project-boards-admin`.
@@ -84,6 +100,6 @@ board. If your certificate comes from an internal CA, the machine's Node.js must
 |---|---|
 | Status and logs | `systemctl status project-boards`, `journalctl -u project-boards -f` |
 | Password, login mode | `project-boards-admin set-password`, `project-boards-admin status` |
-| Upgrade | Unpack the new bundle and run its `./install.sh`. Settings and data are kept, the service restarts. This drops open pages and `pb wait` calls for a moment; both recover. |
+| Upgrade | Run the install command again. Settings and data are kept, the service restarts. This drops open pages and `pb wait` calls for a moment; both recover. |
 | Back up | `/var/lib/project-boards` and `/etc/project-boards`. Plain files; a copy taken while it runs is fine for anything but the last few writes. |
 | Remove | `systemctl disable --now project-boards`, then delete `/opt/project-boards`, `/etc/project-boards`, `/etc/systemd/system/project-boards.service`, `/usr/local/sbin/project-boards-admin`, and the data if you mean to. |
