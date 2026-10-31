@@ -18,13 +18,18 @@ const { upgradeText } = require('./lib/upgrade-guide');
 const { createDocs, RAW_TYPES, SANDBOX_CSP } = require('./lib/docs');
 const { deriveStatus, resolutionOf, firstWord, STATUSES } = require('./lib/status');
 
-const VERSION = '1.7.2';
+const VERSION = '1.8.0';
 const ROOT = __dirname;
 const PORT = Number(process.env.PB_PORT || 4780);
 const HOST = process.env.PB_HOST || '0.0.0.0';
 // Where clients (the machines running Claude sessions) see this folder, for the paths the onboarding page prints.
 const CLIENT_ROOT = process.env.PB_CLIENT_ROOT || ROOT;
 const DATA = process.env.PB_DATA || path.join(ROOT, 'data');
+// A sub-path this server also answers on, as /projects. Requests under it and at the root both work, each with its own links.
+const BASE_PATH = cleanBasePath(process.env.PB_BASE_PATH);
+if (process.env.PB_BASE_PATH && !BASE_PATH && process.env.PB_BASE_PATH.replace(/\/+/g, '')) {
+	throw new Error(`PB_BASE_PATH is not a path: ${process.env.PB_BASE_PATH}`);
+}
 const PUBLIC = path.join(ROOT, 'public');
 const PROJECTS_DIR = path.join(DATA, 'projects');
 const MAX_BODY = 200 * 1024 * 1024;
@@ -798,6 +803,16 @@ const MIME = {
 	'.md': 'text/markdown; charset=utf-8', '.ico': 'image/x-icon',
 };
 
+// A page, with the sub-path it was reached on put into its asset links and given to its scripts as window.PB_BASE.
+function servePage(req, res, file) {
+	const base = req.pbBase;
+	const html = fs.readFileSync(file, 'utf8')
+		.replace('<head>', `<head>\n<script>window.PB_BASE = ${JSON.stringify(base)};</script>`)
+		.replace(/(href|src)="\//g, `$1="${base}/`);
+	res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+	res.end(html);
+}
+
 function serveFile(res, file) {
 	if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
 		send(res, 404, { error: 'not found' });
@@ -833,7 +848,7 @@ function projectSummary(p) {
 function baseUrl(req) {
 	const proto = String(req.headers['x-forwarded-proto'] || 'http').split(',')[0].trim() === 'https' ? 'https' : 'http';
 	const host = String(req.headers['x-forwarded-host'] || req.headers.host || `${HOST}:${PORT}`).split(',')[0].trim();
-	return `${proto}://${host}`;
+	return `${proto}://${host}${req.pbBase || ''}`;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -974,8 +989,30 @@ async function authRoute(req, res, url, method, who, [sub, arg, act]) {
 // ---------------------------------------------------------------------------------------------------------------
 // Routes
 
+function cleanBasePath(p) {
+	const c = `/${String(p || '').split('/').filter(Boolean).join('/')}`;
+	return c !== '/' && /^(\/[\w.~-]+)+$/.test(c) && !/\/\.\.?(\/|$)/.test(c) ? c : '';
+}
+
+function under(pathname, base) {
+	return pathname === base || pathname.startsWith(`${base}/`);
+}
+
+// Which sub-path a request is on, and its path without it. A proxy that strips the sub-path says which with
+// X-Forwarded-Prefix, believed only from loopback like the other forwarded headers; otherwise the path shows it.
+function locate(req, url) {
+	const sock = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+	const told = sock === '127.0.0.1' || sock === '::1' ? cleanBasePath(req.headers['x-forwarded-prefix']) : '';
+	const base = told || (BASE_PATH && under(url.pathname, BASE_PATH) ? BASE_PATH : '');
+	req.pbBase = base;
+	if (base && under(url.pathname, base)) {
+		url.pathname = url.pathname.slice(base.length) || '/';
+	}
+}
+
 async function route(req, res) {
 	const url = new URL(req.url, 'http://x');
+	locate(req, url);
 	const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
 	const method = req.method;
 	const who = auth.authenticate(req);
@@ -993,7 +1030,7 @@ async function route(req, res) {
 		if (parts[0] === 'api' || parts[0] === 'media' || method !== 'GET') {
 			throw httpError(401, `login required: run \`pb login\` (pb ${info ? info.version : ''} or newer; install: curl -fsSL ${baseUrl(req)}/install | sh), or sign in at ${baseUrl(req)}/login`);
 		}
-		res.writeHead(302, { Location: `/login?next=${encodeURIComponent(url.pathname + url.search)}`, 'Cache-Control': 'no-store' });
+		res.writeHead(302, { Location: `${req.pbBase}/login?next=${encodeURIComponent(req.pbBase + url.pathname + url.search)}`, 'Cache-Control': 'no-store' });
 		res.end();
 		return;
 	}
@@ -1379,19 +1416,19 @@ async function route(req, res) {
 		return;
 	}
 	if (parts[0] === 's' && parts.length === 2 && method === 'GET') {
-		return serveFile(res, path.join(PUBLIC, 'doc.html'));
+		return servePage(req, res, path.join(PUBLIC, 'doc.html'));
 	}
 	if (parts[0] === 's' && parts.length === 3 && parts[2] === 'raw' && method === 'GET') {
 		return sendRaw(res, docs.shared(parts[1], projects).doc);
 	}
 	if (parts[0] === 'd' && parts.length === 3 && method === 'GET') {
-		return serveFile(res, path.join(PUBLIC, 'doc.html'));
+		return servePage(req, res, path.join(PUBLIC, 'doc.html'));
 	}
 	if (parts[0] === 'install' && parts.length === 1 && method === 'GET') {
 		return send(res, 200, installScript({ base: baseUrl(req) }), { 'Content-Type': 'text/plain; charset=utf-8' });
 	}
 	if (parts[0] === 'login' && method === 'GET' && (parts.length === 1 || (parts.length === 2 && parts[1] === 'device'))) {
-		return serveFile(res, path.join(PUBLIC, 'login.html'));
+		return servePage(req, res, path.join(PUBLIC, 'login.html'));
 	}
 	if (parts[0] === 'upgrade' && method === 'GET') {
 		return send(res, 200, upgradeText({ base: baseUrl(req), cliVersion: info && info.version }), { 'Content-Type': 'text/markdown; charset=utf-8' });
@@ -1412,6 +1449,9 @@ async function route(req, res) {
 		const file = path.join(PUBLIC, rel);
 		if (!file.startsWith(PUBLIC)) {
 			throw httpError(400, 'bad path');
+		}
+		if (file.endsWith('.html') && fs.existsSync(file)) {
+			return servePage(req, res, file);
 		}
 		return serveFile(res, file);
 	}

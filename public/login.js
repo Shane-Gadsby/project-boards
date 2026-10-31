@@ -3,10 +3,11 @@
 
 const $ = (sel) => document.querySelector(sel);
 const params = new URLSearchParams(location.search);
-const isDevice = location.pathname === '/login/device';
+const BASE = window.PB_BASE || '';
+const isDevice = location.pathname.slice(BASE.length) === '/login/device';
 
 async function api(method, path, body) {
-	const res = await fetch(path, {
+	const res = await fetch(BASE + path, {
 		method,
 		headers: { 'Content-Type': 'application/json', 'X-PB-Actor': 'user' },
 		body: body === undefined ? undefined : JSON.stringify(body),
@@ -36,8 +37,8 @@ function fail(el, e) {
 
 // Only a path on this site: never send someone off to another site after signing in.
 function nextUrl() {
-	const n = params.get('next') || '/';
-	return (n.startsWith('/') && !n.startsWith('//') ? n : '/') + location.hash;
+	const n = params.get('next') || `${BASE}/`;
+	return (n.startsWith('/') && !n.startsWith('//') ? n : `${BASE}/`) + location.hash;
 }
 
 async function afterSignIn() {

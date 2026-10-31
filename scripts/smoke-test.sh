@@ -68,4 +68,19 @@ check "self-update --yes" "$PB" self-update --yes
 check "now the new version" sh -c "\"$PB\" version --local | grep -q $NEW"
 check "kept its home server" grep -q "^const DEFAULT_SERVER = '$BASE';" "$PB"
 check "pb still runs" "$PB" tasks
+# A sub-path, alongside the root.
+SUB=$((PORT + 2))
+PB_AUTH=off PB_HOST=127.0.0.1 PB_PORT=$SUB PB_DATA="$WORK/data2" PB_BASE_PATH=/projects node "$ROOT/server.js" >"$WORK/sub.log" 2>&1 &
+PIDS="$PIDS $!"
+i=0; until curl -fsS "http://127.0.0.1:$SUB/projects/api/health" >/dev/null 2>&1; do i=$((i + 1)); [ $i -lt 50 ] || exit 1; sleep 0.1; done
+check "page under the sub-path" sh -c "curl -fsS http://127.0.0.1:$SUB/projects/ | grep -q 'src=\"/projects/app.js\"'"
+check "page at the root" sh -c "curl -fsS http://127.0.0.1:$SUB/ | grep -q 'src=\"/app.js\"'"
+check "assets under the sub-path" curl -fsS "http://127.0.0.1:$SUB/projects/app.js"
+unset PB_RELEASES_URL
+mkdir -p "$WORK/subrepo"; cd "$WORK/subrepo"
+check "pb use with a sub-path" "$PB" use "http://127.0.0.1:$SUB/projects" --project sub
+check "register there" "$PB" register sub --name Sub --path "$WORK/subrepo"
+check "add a task there" "$PB" add --title "sub task"
+check "list it" "$PB" tasks
+has "the task is listed" "sub task"
 echo "all passed"

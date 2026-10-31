@@ -21,8 +21,9 @@ Server, from its environment (restart to apply):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PB_PUBLIC_URL` | the address a request came in on | The address stamped into the `pb` this server publishes. `pb` treats it as home and upgrades from it. |
+| `PB_PUBLIC_URL` | the address a request came in on, sub-path included | The address stamped into the `pb` this server publishes. `pb` treats it as home and upgrades from it. |
 | `PB_LAN_URL` | (none) | A second address, stamped too; `pb` falls back to it when the main one fails. |
+| `PB_BASE_PATH` | (none) | A sub-path to answer on as well as the root, such as `/projects`. See below. |
 | `PB_PORT` | 4780 | Port. |
 | `PB_HOST` | 0.0.0.0 | Interface. Use `127.0.0.1` behind a local proxy. |
 | `PB_DATA` | `./data` | Data folder. |
@@ -34,6 +35,21 @@ Server, from its environment (restart to apply):
 
 Clients: `PB_URL`, `PB_PROJECT`, `PB_TOKEN` (a token instead of `pb login`'s saved one), `XDG_CONFIG_HOME` (see
 [claude-sessions.md](claude-sessions.md)).
+
+## Serving from a sub-directory
+
+A board can live at `https://blah.com/`, at `https://blah.com/projects`, or at both. Pages, links, the login cookie, `pb` and
+media all follow the address they were reached on.
+
+Set `PB_BASE_PATH=/projects`, and send the requests to the server with the path intact. The root keeps working as well, so
+close it at the proxy if you do not want it. Include the path in `PB_PUBLIC_URL`, because `pb` keeps that address as its
+home: `PB_PUBLIC_URL=https://blah.com/projects`. Clients use it the same way: `pb use https://blah.com/projects`.
+
+A proxy that removes the path before forwarding has to say what it removed, in an `X-Forwarded-Prefix: /projects` header. That
+is believed only from a proxy on the same machine; a proxy elsewhere must leave the path intact and rely on `PB_BASE_PATH`.
+
+Signing in on a sub-path sets the cookie for that path only, so other apps on the domain never receive it. Sign in separately
+if you use both addresses.
 
 ## When it is down
 

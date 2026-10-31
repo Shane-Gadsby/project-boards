@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 // Bump on every change: the server reads this line to publish the version (GET /api/pb), and pb upgrade compares it.
-const VERSION = '1.7.2';
+const VERSION = '1.8.0';
 
 // Where pb self-update looks: the latest published release, which has pb and pb.sha256 attached. Drafts and pre-releases
 // are not offered.

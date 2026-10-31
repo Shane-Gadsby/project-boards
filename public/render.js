@@ -1,4 +1,12 @@
 'use strict';
+
+// The sub-path this page is on, '' at the root (set by the server).
+const BASE = window.PB_BASE || '';
+
+// Records keep /media/... whatever address they were made on.
+function mediaUrl(url) {
+	return String(url).startsWith('/media/') ? BASE + url : url;
+}
 // Shared by the board (app.js) and the full-page doc view (doc.js): a small, safe markdown renderer, and the body of a
 // doc in each format. Everything is escaped first; HTML and SVG docs never enter this page's DOM: they load from the
 // raw URL into a sandboxed frame (and the server adds a CSP sandbox), so their scripts run in an opaque origin.
@@ -17,8 +25,8 @@ function mdInline(s) {
 		return `\u0000${code.length - 1}\u0000`;
 	});
 	out = out
-		.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, url) => (SAFE_URL.test(url) ? `<img src="${url}" alt="${alt}" loading="lazy">` : m))
-		.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) => (SAFE_URL.test(url) ? `<a href="${url}" target="_blank" rel="noopener">${text}</a>` : m))
+		.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, url) => (SAFE_URL.test(url) ? `<img src="${mediaUrl(url)}" alt="${alt}" loading="lazy">` : m))
+		.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) => (SAFE_URL.test(url) ? `<a href="${mediaUrl(url)}" target="_blank" rel="noopener">${text}</a>` : m))
 		.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
 		.replace(/(^|[^*\w])\*([^*\s][^*]*)\*(?!\w)/g, '$1<em>$2</em>')
 		.replace(/(^|[^_\w])_([^_\s][^_]*)_(?!\w)/g, '$1<em>$2</em>')

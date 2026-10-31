@@ -3,7 +3,7 @@
 // no sign-in (the token is the permission).
 
 const $ = (sel) => document.querySelector(sel);
-const [, kind, a, b] = location.pathname.split('/').map(decodeURIComponent);
+const [, kind, a, b] = location.pathname.slice(BASE.length).split('/').map(decodeURIComponent);
 const shared = kind === 's';
 
 function ago(iso) {
@@ -12,9 +12,9 @@ function ago(iso) {
 }
 
 async function getJson(url) {
-	const res = await fetch(url, { headers: { 'X-PB-Actor': 'user' } });
+	const res = await fetch(BASE + url, { headers: { 'X-PB-Actor': 'user' } });
 	if (res.status === 401) {
-		location.href = `/login?next=${encodeURIComponent(location.pathname)}`;
+		location.href = `${BASE}/login?next=${encodeURIComponent(location.pathname)}`;
 		throw new Error('signing in');
 	}
 	const data = await res.json().catch(() => ({}));
@@ -34,13 +34,13 @@ async function load() {
 	let raw;
 	if (shared) {
 		({ project, doc } = await getJson(`/api/shared/${encodeURIComponent(a)}`));
-		raw = `/s/${encodeURIComponent(a)}/raw?v=${doc.version}`;
+		raw = `${BASE}/s/${encodeURIComponent(a)}/raw?v=${doc.version}`;
 	} else {
 		const p = `/api/projects/${encodeURIComponent(a)}`;
 		[project, doc] = await Promise.all([getJson(p), getJson(`${p}/docs/${encodeURIComponent(b)}`)]);
-		raw = `${p}/docs/${encodeURIComponent(b)}/raw?version=${doc.version}`;
+		raw = `${BASE}${p}/docs/${encodeURIComponent(b)}/raw?version=${doc.version}`;
 		const board = $('#present-board');
-		board.href = `/#/${encodeURIComponent(a)}/docs/${encodeURIComponent(b)}`;
+		board.href = `${BASE}/#/${encodeURIComponent(a)}/docs/${encodeURIComponent(b)}`;
 		board.hidden = false;
 	}
 	shownVersion = doc.version;
@@ -92,7 +92,7 @@ async function catchUp() {
 function follow(reconnecting = false) {
 	let greeted = reconnecting; // a hello after the first means the stream reconnected
 	lastHeard = Date.now();
-	const es = new EventSource(`/api/projects/${encodeURIComponent(a)}/events`);
+	const es = new EventSource(`${BASE}/api/projects/${encodeURIComponent(a)}/events`);
 	stream = es;
 	es.onerror = () => {
 		// The browser retries a dropped stream itself, but gives up for good on an error answer, like the proxy's 503

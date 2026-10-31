@@ -54,7 +54,7 @@ function ago(iso) {
 }
 
 async function api(method, path, body) {
-	const res = await fetch(path, {
+	const res = await fetch(BASE + path, {
 		method,
 		headers: { 'Content-Type': 'application/json', 'X-PB-Actor': 'user' },
 		body: body === undefined ? undefined : JSON.stringify(body),
@@ -62,7 +62,7 @@ async function api(method, path, body) {
 	const data = await res.json().catch(() => ({}));
 	if (res.status === 401 && !path.startsWith('/api/auth/')) {
 		// The session expired or was revoked (logins are required): sign in again and come back here.
-		location.href = `/login?next=${encodeURIComponent(location.pathname)}${location.hash}`;
+		location.href = `${BASE}/login?next=${encodeURIComponent(location.pathname)}${location.hash}`;
 		throw new Error('signing in again');
 	}
 	if (!res.ok) {
@@ -192,7 +192,7 @@ function connectEvents(reconnecting = false) {
 	clearTimeout(retryTimer);
 	connected = reconnecting;
 	lastHeard = Date.now();
-	const es = new EventSource(P('/events'));
+	const es = new EventSource(BASE + P('/events'));
 	state.es = es;
 	const conn = $('#conn');
 	es.onopen = () => conn.classList.add('live');
@@ -533,9 +533,9 @@ function renderHandoffCard(h) {
 				return `<figure><div class="none">(media not available)</div>${m.caption ? `<figcaption>${esc(m.caption)}</figcaption>` : ''}</figure>`;
 			}
 			if (m.kind === 'video') {
-				return `<figure class="vid" data-caption="${esc(m.caption)}"><video src="${esc(m.url)}" muted controls playsinline preload="metadata"></video><figcaption>${esc(m.caption)}<button type="button" class="enlarge">Enlarge</button></figcaption></figure>`;
+				return `<figure class="vid" data-caption="${esc(m.caption)}"><video src="${esc(mediaUrl(m.url))}" muted controls playsinline preload="metadata"></video><figcaption>${esc(m.caption)}<button type="button" class="enlarge">Enlarge</button></figcaption></figure>`;
 			}
-			return `<figure><img src="${esc(m.url)}" alt="${esc(m.caption)}" loading="lazy">${m.caption ? `<figcaption>${esc(m.caption)}</figcaption>` : ''}</figure>`;
+			return `<figure><img src="${esc(mediaUrl(m.url))}" alt="${esc(m.caption)}" loading="lazy">${m.caption ? `<figcaption>${esc(m.caption)}</figcaption>` : ''}</figure>`;
 		};
 		html += `<div class="media${videos ? ' has-video' : ''}">${h.media.map(figure).join('')}${videos > 1 ? `<button type="button" class="compare">Compare the ${videos} videos side by side</button>` : ''}</div>`;
 	}
@@ -738,7 +738,7 @@ function openSettings() {
 	f.maxSubagents.value = String(p.maxSubagents);
 	f.lanes.value = (p.lanes || []).map((l) => l.name).join(', ');
 	f.banner.value = p.banner || '';
-	$('#onboard-url').textContent = `${location.origin}/onboard/${p.slug}`;
+	$('#onboard-url').textContent = `${location.origin}${BASE}/onboard/${p.slug}`;
 	$('#settings').showModal();
 }
 
@@ -757,10 +757,10 @@ async function saveSettings() {
 
 async function init() {
 	for (const n of $$('.enrol-url')) {
-		n.textContent = `${location.origin}/enrol`;
+		n.textContent = `${location.origin}${BASE}/enrol`;
 	}
 	for (const b of $$('.copy-enrol')) {
-		b.addEventListener('click', () => copyText(`${location.origin}/enrol`, b));
+		b.addEventListener('click', () => copyText(`${location.origin}${BASE}/enrol`, b));
 	}
 	await renderSignInOut().catch(() => {});
 	await loadProjects();
@@ -780,7 +780,7 @@ async function init() {
 	if (!slug) {
 		$('#tab-handoffs').hidden = true;
 		$('#empty').hidden = false;
-		$('#empty').innerHTML = `No projects yet. Add one from the menu, or give a Claude session <code>${esc(location.origin)}/enrol</code>.`;
+		$('#empty').innerHTML = `No projects yet. Add one from the menu, or give a Claude session <code>${esc(location.origin + BASE)}/enrol</code>.`;
 		return;
 	}
 	await selectProject(slug);
@@ -815,7 +815,7 @@ $('#open-settings').addEventListener('click', openSettings);
 const DOC_FORMATS = ['markdown', 'html', 'svg', 'json', 'csv', 'code', 'text'];
 
 function docRawUrl(id, version) {
-	return P(`/docs/${encodeURIComponent(id)}/raw?version=${version}`);
+	return BASE + P(`/docs/${encodeURIComponent(id)}/raw?version=${version}`);
 }
 
 function byWhom(actor) {
@@ -913,7 +913,7 @@ function renderDocPane() {
 		</div>
 		<div class="doc-actions">
 			<button type="button" data-act="edit">Edit</button>
-			<a class="button" href="/d/${encodeURIComponent(state.slug)}/${encodeURIComponent(d.id)}" target="_blank" rel="noopener">Present</a>
+			<a class="button" href="${BASE}/d/${encodeURIComponent(state.slug)}/${encodeURIComponent(d.id)}" target="_blank" rel="noopener">Present</a>
 			<a class="button" href="${esc(docRawUrl(d.id, d.version))}" target="_blank" rel="noopener">Raw</a>
 			<button type="button" data-act="history">History</button>
 			${signedIn ? `<button type="button" data-act="share">${latest.share ? 'Shared' : 'Share'}</button>` : ''}
@@ -926,7 +926,7 @@ function renderDocPane() {
 		parts.push(banner);
 	}
 	if (latest.share) {
-		parts.push(el(`<div class="doc-banner share">Anyone with this link can read it, without signing in: <code>${esc(location.origin)}/s/${esc(latest.share)}</code> <button type="button" data-act="copy-share">Copy</button> <button type="button" data-act="unshare">Stop sharing</button></div>`));
+		parts.push(el(`<div class="doc-banner share">Anyone with this link can read it, without signing in: <code>${esc(location.origin + BASE)}/s/${esc(latest.share)}</code> <button type="button" data-act="copy-share">Copy</button> <button type="button" data-act="unshare">Stop sharing</button></div>`));
 	}
 	parts.push(el(`<div class="doc-body format-${esc(d.format)}">${renderDoc(d, docRawUrl(d.id, d.version))}</div>`));
 	pane.replaceChildren(...parts);
@@ -957,7 +957,7 @@ async function docAction(act) {
 			await api('POST', P(`/docs/${encodeURIComponent(id)}/share`));
 		}
 	} else if (act === 'copy-share') {
-		copyText(`${location.origin}/s/${state.docs.get(id).share}`);
+		copyText(`${location.origin}${BASE}/s/${state.docs.get(id).share}`);
 	} else if (act === 'unshare') {
 		await api('DELETE', P(`/docs/${encodeURIComponent(id)}/share`));
 	} else if (act === 'delete') {
@@ -1167,10 +1167,10 @@ async function renderSignInOut() {
 $('#sign-in-out').addEventListener('click', async () => {
 	if (state.me && state.me.signedIn && state.me.kind === 'session') {
 		await api('POST', '/api/auth/logout').catch(() => {});
-		location.href = state.me.mode === 'required' ? '/login' : location.href;
+		location.href = state.me.mode === 'required' ? `${BASE}/login` : location.href;
 		await renderSignInOut();
 	} else {
-		location.href = `/login?next=${encodeURIComponent(location.pathname)}${location.hash}`;
+		location.href = `${BASE}/login?next=${encodeURIComponent(location.pathname)}${location.hash}`;
 	}
 });
 
@@ -1188,7 +1188,7 @@ function credentialRow(cells, rec, current) {
 		try {
 			await api('DELETE', `/api/auth/tokens/${encodeURIComponent(rec.id)}`);
 			if (current) {
-				location.href = '/login';
+				location.href = `${BASE}/login`;
 				return;
 			}
 			await openAccess();
@@ -1210,7 +1210,7 @@ async function openAccess() {
 	const signedIn = me.signedIn && me.kind === 'session';
 	$('#access-signed-out').hidden = signedIn;
 	$('#access-body').hidden = !signedIn;
-	$('#install-cmd').textContent = `curl -fsSL ${location.origin}/install | sh`;
+	$('#install-cmd').textContent = `curl -fsSL ${location.origin}${BASE}/install | sh`;
 	$('#password-cmd').textContent = me.setPassword;
 	const f = $('#access-form');
 	f.mode.value = me.mode;

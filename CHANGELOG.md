@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.8.0 (2026-11-01)
+
+- A board can be served from a sub-directory as well as the root: `PB_BASE_PATH=/projects`, or `X-Forwarded-Prefix` from a
+  local proxy that strips the path. Pages, links, media, `pb` and the login cookie follow the address used.
+
 ## 1.7.2 (2026-11-01)
 
 - The bundle and the RHEL guide use HAProxy instead of nginx for TLS.

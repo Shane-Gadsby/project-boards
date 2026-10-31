@@ -113,6 +113,15 @@ reports them as down. That is harmless, and you can remove the sample.
 The proxy must keep long responses open: this file does, with one-hour client and server timeouts. A different
 proxy needs the same, and must pass `X-Forwarded-Proto` and `X-Forwarded-Host`.
 
+To put the board under a sub-path of a domain that serves other things, route that path to it and keep the rest, then set
+`PB_BASE_PATH=/projects` and `PB_PUBLIC_URL=https://blah.com/projects` in the env file. In the HAProxy frontend:
+
+```haproxy
+acl is_boards path /projects
+acl is_boards path_beg /projects/
+use_backend project_boards if is_boards
+```
+
 Without a proxy, for a trial on a trusted network: set `PB_HOST=0.0.0.0`, then
 `firewall-cmd --permanent --add-port=4780/tcp && firewall-cmd --reload`.
 
