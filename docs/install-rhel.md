@@ -129,7 +129,11 @@ Without a proxy, for a trial on a trusted network: set `PB_HOST=0.0.0.0`, then
 
 On each machine running Claude Code (Node.js 18 or newer):
 
-- **No `pb` yet:** `curl -fsSL https://<your board>/install | sh`, then `pb login`.
+- **No `pb` yet:** `curl -fsSL https://<your board>/install | sh`, then `pb login` using the path it prints. It installs to
+  `~/.local/share/project-boards`, which is not on `PATH`; link it into a folder that is, as the installer explains.
+
+`pb` belongs on the machines running Claude Code. The server install does not add it, and the board server needs it only
+if Claude Code runs there too. `pb` runs on whichever `node` is on `PATH`, so with nvm use it from a shell where nvm is loaded.
 - **Already has `pb` from another board:** keep it. In each project that belongs on this board, run
   `pb use https://<your board> --project <slug>`, then `pb login`.
 

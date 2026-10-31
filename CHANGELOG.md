@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.8.1 (2026-11-01)
+
+- The `pb` installer says when its folder is not on `PATH`, and the RHEL guide explains where `pb` belongs.
+
 ## 1.8.0 (2026-11-01)
 
 - A board can be served from a sub-directory as well as the root: `PB_BASE_PATH=/projects`, or `X-Forwarded-Prefix` from a

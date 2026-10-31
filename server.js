@@ -18,7 +18,7 @@ const { upgradeText } = require('./lib/upgrade-guide');
 const { createDocs, RAW_TYPES, SANDBOX_CSP } = require('./lib/docs');
 const { deriveStatus, resolutionOf, firstWord, STATUSES } = require('./lib/status');
 
-const VERSION = '1.8.0';
+const VERSION = '1.8.1';
 const ROOT = __dirname;
 const PORT = Number(process.env.PB_PORT || 4780);
 const HOST = process.env.PB_HOST || '0.0.0.0';
