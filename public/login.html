@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in - Project Boards</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='2' width='4' height='12' rx='1' fill='%235b6bd6'/%3E%3Crect x='6' y='2' width='4' height='8' rx='1' fill='%23e0a12b'/%3E%3Crect x='11' y='2' width='4' height='5' rx='1' fill='%232f9e6e'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="login-page">
+<main class="login-box">
+	<div class="brand">Project Boards</div>
+
+	<section id="state-message" hidden>
+		<p id="message-text"></p>
+	</section>
+
+	<form id="password-form" hidden>
+		<h1>Sign in</h1>
+		<label>Password <input type="password" name="password" autocomplete="current-password" required autofocus></label>
+		<p class="login-error" id="password-error" hidden></p>
+		<button class="primary" type="submit">Sign in</button>
+	</form>
+
+	<form id="code-form" hidden>
+		<h1>Sign in an app</h1>
+		<p class="hint">Enter the code the app showed you.</p>
+		<label>Code <input name="code" autocomplete="off" placeholder="BCDF-GHJK" required></label>
+		<p class="login-error" id="code-error" hidden></p>
+		<button class="primary" type="submit">Continue</button>
+	</form>
+
+	<section id="approve" hidden>
+		<h1>Allow this app?</h1>
+		<p><strong id="approve-client"></strong> wants to read and change your boards.</p>
+		<dl class="kv" id="approve-details"></dl>
+		<p class="hint">Only allow it if you just started this sign-in yourself and the code matches what the app shows: <code id="approve-code"></code></p>
+		<p class="login-error" id="approve-error" hidden></p>
+		<div class="login-actions"><button type="button" id="deny">Deny</button><button type="button" class="primary" id="allow">Allow</button></div>
+	</section>
+</main>
+<script src="/login.js"></script>
+</body>
+</html>

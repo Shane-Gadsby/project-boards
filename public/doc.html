@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project Boards</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='2' width='4' height='12' rx='1' fill='%235b6bd6'/%3E%3Crect x='6' y='2' width='4' height='8' rx='1' fill='%23e0a12b'/%3E%3Crect x='11' y='2' width='4' height='5' rx='1' fill='%232f9e6e'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="present">
+<header class="present-bar">
+	<div class="present-title"><span id="present-project" class="muted-text"></span><h1 id="present-name"></h1></div>
+	<span id="present-meta" class="muted-text"></span>
+	<div class="spacer"></div>
+	<a class="button" id="present-raw" target="_blank" rel="noopener">Raw</a>
+	<button type="button" id="present-copy">Copy link</button>
+	<a class="button" id="present-board" hidden>Open on the board</a>
+</header>
+<main class="present-main" id="present-body"></main>
+<script src="/render.js"></script>
+<script src="/doc.js"></script>
+</body>
+</html>

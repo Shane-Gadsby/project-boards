@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project Boards</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='2' width='4' height='12' rx='1' fill='%235b6bd6'/%3E%3Crect x='6' y='2' width='4' height='8' rx='1' fill='%23e0a12b'/%3E%3Crect x='11' y='2' width='4' height='5' rx='1' fill='%232f9e6e'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+	<div class="brand">Project Boards</div>
+	<select id="project" aria-label="Project"></select>
+	<nav class="tabs" role="tablist">
+		<button class="tab" data-tab="handoffs" role="tab">Hand-offs <span class="badge" id="badge-handoffs"></span></button>
+		<button class="tab" data-tab="tasks" role="tab">Tasks <span class="badge muted" id="badge-tasks"></span></button>
+		<button class="tab" data-tab="docs" role="tab">Docs <span class="badge muted" id="badge-docs"></span></button>
+	</nav>
+	<div class="spacer"></div>
+	<span class="agents" id="agents" title="Sub-agents this project may run at once"></span>
+	<span class="conn" id="conn" title="Live connection to the server"></span>
+	<button class="icon" id="resync" title="Reload this project from the server" aria-label="Reload this project from the server">&#8635;</button>
+	<button id="open-rules" title="Rules for every project">Rules</button>
+	<button id="open-access" title="Logins: who and what can use the boards">Access</button>
+	<button id="sign-in-out" hidden></button>
+	<button class="icon" id="open-settings" title="Project settings" aria-label="Project settings">&#9881;</button>
+</header>
+<div class="banner" id="banner" hidden></div>
+<main>
+	<section id="tab-handoffs" class="tabpane" hidden>
+		<div class="message-box">
+			<textarea id="message-text" rows="2" placeholder="Message Claude (it lands in this project's inbox)"></textarea>
+			<button id="message-send" class="primary">Send to Claude</button>
+		</div>
+		<h2 class="section-title">Waiting for you <span class="count" id="count-waiting"></span></h2>
+		<div id="waiting" class="lanes"></div>
+		<h2 class="section-title">Answered &mdash; Claude has not picked these up yet <span class="count" id="count-answered"></span></h2>
+		<div class="notify-bar" id="notify-bar" hidden>
+			<button id="notify-sessions" class="primary">Tell waiting sessions</button>
+			<span class="hint" id="notify-status"></span>
+		</div>
+		<div id="answered" class="cards"></div>
+		<details class="done-section">
+			<summary><h2 class="section-title inline">Done <span class="count" id="count-acted"></span></h2></summary>
+			<input id="done-filter" class="filter" placeholder="Filter done hand-offs">
+			<div id="acted" class="cards"></div>
+		</details>
+	</section>
+	<section id="tab-tasks" class="tabpane" hidden>
+		<div class="tasks-toolbar">
+			<input id="task-filter" class="filter" placeholder="Filter tasks (id, title, owner, state)">
+			<button id="add-task">Add task</button>
+		</div>
+		<div class="board">
+			<div class="column" data-status="todo"><h2>Not started <span class="count"></span></h2><div class="col-cards"></div></div>
+			<div class="column" data-status="active"><h2>Being worked on <span class="count"></span></h2><div class="col-cards"></div></div>
+			<div class="column" data-status="done"><h2>Complete <span class="count"></span></h2><div class="col-cards"></div><button class="more" hidden></button></div>
+		</div>
+	</section>
+	<section id="tab-docs" class="tabpane" hidden>
+		<div class="docs-layout">
+			<aside class="docs-side">
+				<div class="docs-toolbar"><input id="doc-filter" class="filter" placeholder="Filter docs (title, tags, text)"><button id="new-doc" class="primary">New doc</button></div>
+				<div id="doc-list" class="doc-list"></div>
+			</aside>
+			<div id="doc-pane" class="doc-pane"></div>
+		</div>
+	</section>
+	<section id="empty" class="empty" hidden></section>
+</main>
+
+<aside id="drawer" class="drawer" hidden>
+	<div class="drawer-head"><h2 id="drawer-title"></h2><button class="icon" id="drawer-close" aria-label="Close">&times;</button></div>
+	<div id="drawer-body"></div>
+</aside>
+
+<dialog id="settings">
+	<form method="dialog" id="settings-form">
+		<h2>Project settings</h2>
+		<label>Name <input name="name" required></label>
+		<label>Path <input name="path" placeholder="/path/to/repo"></label>
+		<label>Description <input name="description"></label>
+		<label>Sub-agents allowed at once
+			<select name="maxSubagents"></select>
+			<small>How many sub-agents Claude may run for this project. 0 = none (Claude works alone).</small>
+		</label>
+		<label>Hand-off lanes <input name="lanes" placeholder="e.g. PC1, PC2 (blank for one list)"></label>
+		<label>Banner <input name="banner" placeholder="One line shown above the board"></label>
+		<div class="onboard">
+			<div>This project's instructions for a Claude session:</div>
+			<code id="onboard-url"></code> <button type="button" id="copy-onboard">Copy</button>
+			<div class="enrol-row">Enrol a new project from scratch:</div>
+			<code class="enrol-url"></code> <button type="button" class="copy-enrol">Copy</button>
+		</div>
+		<menu><button value="cancel" formnovalidate>Cancel</button><button value="save" class="primary">Save</button></menu>
+	</form>
+</dialog>
+
+<dialog id="rules">
+	<form method="dialog" id="rules-form">
+		<h2>Global rules</h2>
+		<p class="hint">Apply to every project. Claude sessions read them each session (<code>pb rules</code>, the onboarding page). One rule per box; empty boxes are dropped.</p>
+		<div id="rules-list"></div>
+		<button type="button" id="add-rule">Add a rule</button>
+		<menu><button value="cancel" formnovalidate>Cancel</button><button value="save" class="primary">Save</button></menu>
+	</form>
+</dialog>
+
+<dialog id="access">
+	<form method="dialog" id="access-form">
+		<h2>Access</h2>
+		<p class="hint" id="access-signed-out" hidden>Sign in to manage access: <a href="/login?next=/">sign in</a>.</p>
+		<div id="access-body">
+			<label>Logins
+				<select name="mode">
+					<option value="optional">Optional: signing in works, nothing is refused yet</option>
+					<option value="required">Required: the page and every app must sign in</option>
+					<option value="off">Off: no logins, the board is open to anyone who can reach it</option>
+				</select>
+				<small id="access-mode-note"></small>
+			</label>
+			<h3 class="section-title">Signed-in apps</h3>
+			<p class="hint">Each machine running Claude signs in once with <code>pb login</code> (it opens a tab here to approve it). Get pb with <code id="install-cmd"></code>.</p>
+			<div class="access-table-wrap"><table class="access-table" id="tokens-table"></table></div>
+			<div class="access-row"><input id="token-name" placeholder="Name for a token (for a script or CI)"><button type="button" id="make-token">Make a token</button></div>
+			<div class="new-token" id="new-token" hidden></div>
+			<h3 class="section-title">Signed-in browsers</h3>
+			<div class="access-table-wrap"><table class="access-table" id="sessions-table"></table></div>
+			<p class="hint">Change the password with <code id="password-cmd"></code> (signs every browser out; apps stay signed in).</p>
+		</div>
+		<menu><button value="cancel">Close</button></menu>
+	</form>
+</dialog>
+
+<dialog id="doc-history">
+	<form method="dialog">
+		<h2 id="doc-history-title">History</h2>
+		<p class="hint">The last 50 versions are kept. Restoring one saves it as a new version.</p>
+		<div class="access-table-wrap"><table class="access-table" id="doc-history-table"></table></div>
+		<menu><button value="cancel">Close</button></menu>
+	</form>
+</dialog>
+
+<dialog id="add-project">
+	<form method="dialog" id="add-project-form">
+		<h2>Add a project</h2>
+		<label>Slug <input name="slug" required pattern="[a-z0-9][a-z0-9-]*" placeholder="short-lower-case"></label>
+		<label>Name <input name="name" required></label>
+		<label>Path <input name="path" placeholder="/path/to/repo"></label>
+		<div class="onboard">
+			<div>Or let a Claude session enrol its own project: give it</div>
+			<code class="enrol-url"></code> <button type="button" class="copy-enrol">Copy</button>
+		</div>
+		<menu><button value="cancel" formnovalidate>Cancel</button><button value="add" class="primary">Add</button></menu>
+	</form>
+</dialog>
+
+<dialog id="add-task-dialog">
+	<form method="dialog" id="add-task-form">
+		<h2>Add a task</h2>
+		<label>Title <input name="title" required></label>
+		<label>State <input name="state" value="open"></label>
+		<label>Details <textarea name="body" rows="8" placeholder="Markdown"></textarea></label>
+		<menu><button value="cancel" formnovalidate>Cancel</button><button value="add" class="primary">Add</button></menu>
+	</form>
+</dialog>
+
+<div id="lightbox" class="lightbox" hidden></div>
+<script src="/render.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

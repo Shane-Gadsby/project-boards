@@ -1,0 +1,134 @@
+#!/usr/bin/env node
+// pb-admin: the board owner's settings that must not be reachable over the web: the password, and whether logins are
+// required. Writes data/auth-admin.json directly, so run it where the server's data folder is (on the server, or on a
+// machine that mounts the shared folder); the server picks the change up on its next request, no restart.
+//
+//   pb-admin set-password            asks twice (or reads one line from stdin when it is not a terminal)
+//   pb-admin mode off|optional|required
+//   pb-admin status
+//   --data <dir>                     the data folder (default: PB_DATA, else ../data next to this script)
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const { hashPassword, MODES } = require('../lib/auth');
+
+const argv = process.argv.slice(2);
+const dataAt = argv.indexOf('--data');
+const DATA = dataAt >= 0 ? path.resolve(argv.splice(dataAt, 2)[1]) : process.env.PB_DATA || path.join(__dirname, '..', 'data');
+const FILE = path.join(DATA, 'auth-admin.json');
+const MIN_LENGTH = 10;
+
+function die(msg) {
+	console.error(`pb-admin: ${msg}`);
+	process.exit(1);
+}
+
+function read() {
+	try {
+		return JSON.parse(fs.readFileSync(FILE, 'utf8'));
+	} catch {
+		return {};
+	}
+}
+
+function write(data) {
+	const tmp = `${FILE}.tmp-${process.pid}`;
+	fs.writeFileSync(tmp, JSON.stringify(data, null, '\t') + '\n', { mode: 0o600 });
+	fs.renameSync(tmp, FILE);
+}
+
+// One line from the terminal without echoing it.
+function askHidden(prompt) {
+	return new Promise((resolve) => {
+		process.stdout.write(prompt);
+		const stdin = process.stdin;
+		stdin.setRawMode(true);
+		stdin.resume();
+		stdin.setEncoding('utf8');
+		let text = '';
+		const onData = (ch) => {
+			for (const c of ch) {
+				if (c === '\r' || c === '\n') {
+					stdin.setRawMode(false);
+					stdin.pause();
+					stdin.off('data', onData);
+					process.stdout.write('\n');
+					resolve(text);
+					return;
+				}
+				if (c === '\u0003') {
+					process.stdout.write('\n');
+					process.exit(130);
+				}
+				if (c === '\u007f' || c === '\b') {
+					text = text.slice(0, -1);
+				} else {
+					text += c;
+				}
+			}
+		};
+		stdin.on('data', onData);
+	});
+}
+
+function readStdinLine() {
+	return new Promise((resolve) => {
+		let s = '';
+		process.stdin.setEncoding('utf8');
+		process.stdin.on('data', (d) => (s += d)).on('end', () => resolve(s.split(/\r?\n/)[0]));
+	});
+}
+
+async function main() {
+	if (!fs.existsSync(path.join(DATA, 'projects'))) {
+		die(`${DATA} does not look like the board's data folder (no projects/ in it); pass --data <dir>`);
+	}
+	const [cmd, arg] = argv;
+	if (cmd === 'set-password') {
+		let pw;
+		if (process.stdin.isTTY) {
+			pw = await askHidden('New board password: ');
+			if ((await askHidden('Again: ')) !== pw) {
+				die('the two did not match; nothing changed');
+			}
+		} else {
+			pw = await readStdinLine();
+		}
+		if (pw.length < MIN_LENGTH) {
+			die(`use at least ${MIN_LENGTH} characters (the board is on the internet); nothing changed`);
+		}
+		write({ ...read(), password: await hashPassword(pw) });
+		console.log(`password set in ${FILE}. Browsers signed in before now are signed out; app tokens stay valid.`);
+		console.log(`Mode: ${read().mode || 'optional (the default)'}${read().mode === 'required' ? '' : '. Once every machine has run pb login: pb-admin mode required'}`);
+		return;
+	}
+	if (cmd === 'mode') {
+		if (!MODES.includes(arg)) {
+			die(`pb-admin mode ${MODES.join('|')}`);
+		}
+		if (arg === 'required' && !(read().password && read().password.hash)) {
+			die('set a password first (pb-admin set-password), or nobody could sign in');
+		}
+		write({ ...read(), mode: arg });
+		console.log(`logins: ${arg} (PB_AUTH in the server's environment, if set, overrides this)`);
+		return;
+	}
+	if (cmd === 'status' || cmd === undefined) {
+		const a = read();
+		let tokens = 0;
+		let sessions = 0;
+		try {
+			const s = JSON.parse(fs.readFileSync(path.join(DATA, 'auth.json'), 'utf8'));
+			tokens = Object.keys(s.tokens || {}).length;
+			sessions = Object.keys(s.sessions || {}).length;
+		} catch {
+			// no logins yet
+		}
+		console.log(`data ${DATA}\npassword ${a.password ? `set ${a.password.set}` : 'not set'}\nmode ${a.mode || 'optional (default)'}\napp tokens ${tokens}, browser sessions ${sessions}`);
+		return;
+	}
+	die(`unknown command "${cmd}": set-password | mode off|optional|required | status`);
+}
+
+main().catch((e) => die(e.stack || e.message));

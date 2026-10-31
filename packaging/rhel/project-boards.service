@@ -1,0 +1,27 @@
+[Unit]
+Description=Project Boards
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=project-boards
+Group=project-boards
+EnvironmentFile=/etc/project-boards/project-boards.env
+ExecStart=/usr/bin/node /opt/project-boards/server.js
+Restart=on-failure
+RestartSec=2
+StateDirectory=project-boards
+StateDirectoryMode=0750
+UMask=0027
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

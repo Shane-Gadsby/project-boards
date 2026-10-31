@@ -1,0 +1,1357 @@
+#!/usr/bin/env node
+// pb: the Claude-side command line for Project Boards. Run `pb help`. One file, Node 18+, no dependencies: each server
+// publishes it at /pb (install: curl -fsSL <server>/install | sh; update: pb upgrade).
+'use strict';
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const readline = require('readline');
+const crypto = require('crypto');
+const { spawn } = require('child_process');
+
+// Bump on every change: the server reads this line to publish the version (GET /api/pb), and pb upgrade compares it.
+const VERSION = '1.7.0';
+
+// Where pb self-update looks: the latest published release, which has pb and pb.sha256 attached. Drafts and pre-releases
+// are not offered.
+const RELEASES_URL = process.env.PB_RELEASES_URL || 'https://api.github.com/repos/Shane-Gadsby/project-boards/releases/latest';
+
+// The server this copy came from: each server fills these two lines in when it publishes pb (keep them one line each),
+// and pb upgrade comes back here. Empty in the source. The LAN address applies to this server only.
+const DEFAULT_SERVER = '';
+const DEFAULT_LAN = '';
+
+function cleanUrl(u) {
+	return String(u || '').trim().replace(/\/+$/, '');
+}
+
+// A project names its server in this file, found upward from the current directory. It is meant to be committed, so it
+// never holds a token, and it cannot name a fallback address: a cloned repo must not be able to redirect a token.
+const MARKER_FILE = '.project-boards.json';
+
+function findMarker() {
+	for (let dir = process.cwd(); ; dir = path.dirname(dir)) {
+		const file = path.join(dir, MARKER_FILE);
+		if (fs.existsSync(file)) {
+			let m;
+			try {
+				m = JSON.parse(fs.readFileSync(file, 'utf8'));
+			} catch (e) {
+				die(`${file} is not valid JSON: ${e.message}`);
+			}
+			if (m.server !== undefined && !/^https?:\/\/\S+$/.test(m.server)) {
+				die(`${file}: "server" must be an http(s) URL`);
+			}
+			return { ...m, server: cleanUrl(m.server), file };
+		}
+		if (dir === path.dirname(dir)) {
+			return null;
+		}
+	}
+}
+
+// Which server, in order: PB_URL, the project's marker file, the server this pb came from.
+const HOME = cleanUrl(DEFAULT_SERVER);
+const marker = findMarker();
+const SERVER = cleanUrl(process.env.PB_URL) || (marker && marker.server) || HOME;
+const SERVER_SOURCE = process.env.PB_URL ? 'PB_URL' : marker && marker.server ? marker.file : HOME ? 'the server this pb was installed from' : 'none';
+let BASE = SERVER;
+// When the home address cannot be reached or does not answer as the API (no internet, an access page in front), its LAN
+// address. PB_URL pins one address and turns this off.
+let fallback = !process.env.PB_URL && SERVER === HOME && DEFAULT_LAN ? DEFAULT_LAN : null;
+const SELF = fs.realpathSync(process.argv[1]);
+// The copy in the server's own folder (next to server.js) is the source the server publishes, not an install.
+const IS_SOURCE = fs.existsSync(path.join(path.dirname(SELF), '..', 'server.js'));
+const DEPS_FILE = 'pb-deps.json';
+const CONFIG_DIR = path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'project-boards');
+const CREDENTIALS = path.join(CONFIG_DIR, 'credentials.json');
+
+const HELP = `pb - Project Boards command line (server ${BASE || 'not set: pb use <url>'})
+
+The server is picked by $PB_URL, else ${MARKER_FILE} (found upward from here), else the server this pb came from.
+The project is picked by --project <slug>, else $PB_PROJECT, else that file, else the registered project whose path
+contains the current directory.
+
+  pb use <url> [--project <slug>]   point this project at a server (writes ${MARKER_FILE}: commit it)
+  pb where                          which server and project apply here, why, and whether this machine has a login
+  pb ensure                         is the board reachable? If not, tell the user (exit 2)
+  pb health                         is the server up?
+
+  pb login [--name <n>] [--no-browser]   sign this machine in: opens a browser tab where the user approves it
+  pb logout                         revoke this machine's token and forget it
+  pb whoami                         who the server sees, and whether logins are required
+  pb version [--local]              this pb's version, and whether the server has a newer one
+  pb self-update [--check] [--yes]  check GitHub releases and, if the user agrees, install a newer pb
+  pb upgrade [--force]              install the server's pb over this one (checked against its sha256)
+  pb projects                       list registered projects
+  pb register <slug> --name <name> [--path <dir>] [--lanes "PC1,PC2"] [--max-subagents N] [--description <text>]
+  pb settings                       show this project's settings (maxSubagents, lanes, banner, busy)
+  pb set [--max-subagents N] [--banner <text>] [--lanes "a,b"] [--name <n>] [--path <dir>]
+  pb rules                          the user's global rules (all projects): read and follow them every session
+  pb busy <lane|all> <text>         show "Claude is using this - leave it alone" on a lane; pb busy <lane> --clear
+  pb agents                         maxSubagents and how many tasks are being worked on now
+
+  pb tasks [--status todo|active|done] [--json]
+  pb task <id>                      one task, with its body and log
+  pb add --title <t> [--id <id>] [--state <s>] [--owner <o>] [--branch <b>] [--results <p>] [--body-file <f>] [--file <path>]
+  pb update <id> [--state <s>] [--status todo|active|done] [--owner <o>] [--title <t>] [--branch <b>] [--note <text>] ...
+                                    add/update also take --tag <t> / --untag <t> (repeatable)
+  pb import-md <dir> [--dry-run]    upsert every <id>-<slug>.md task file (State:/Owner:/Claimed:/Branch:/Results:/Needs:)
+  pb import-json <file>             upsert tasks from [{id, title, state, ...}]
+  pb rm <id>                        delete a task
+
+  pb ask --title <t> --question <q> [--kind choice|text|look|steps|info] [--choice "Label|detail"]...
+         [--default <label>] [--context <text>] [--lane <lane>] [--media <file>]... [--step "do|expect"]... [--id <id>]
+  pb ask-json <file>                create/update hand-offs from a JSON object or array
+  pb handoffs [--state pending|answered|acted] [--json]
+  pb inbox [--json]                 what the user answered or said that you have not acknowledged
+  pb ack <id> [--note <text>] [--hide]   mark an answer as acted on (do this once you have recorded/acted on it)
+  pb wait [--timeout <seconds>]     block until the user answers something (prints the inbox); default 600
+  pb upload <file>                  upload an image/video, prints the URL to use in --media / "media"
+
+  pb format-request --project <slug> --name <format> --description <text> [--sample-file <f>]
+                                    ask for a native importer for a format the board does not read yet (see /enrol)
+
+Docs: this project's documents (specs, reports, notes, HTML pages, SVG diagrams, JSON, CSV), shown on the board's Docs
+tab, editable there by the user, presentable at /d/<project>/<id>:
+  pb docs [--tag <t>] [--unseen] [--json]   list them; --unseen: the ones the user edited that you have not read
+  pb doc <id> [--version <n>] [--out <file>] [--meta]   print a doc (or save it); reading the latest marks the user's
+                                    edit as read
+  pb doc put <file|-> [--id <id>] [--title <t>] [--format markdown|html|svg|json|csv|code|text] [--language <l>]
+         [--tag <t>]... [--summary <s>] [--note <what changed>] [--if-version <n>]
+                                    create or update (id defaults to the file name; format from its extension)
+  pb doc rm <id> | pb doc history <id> | pb doc url <id>
+
+Depending on other projects (no registration needed; see ${BASE}/deps):
+  pb deps [<ref>...] [--json] [--strict]   check what this project waits on (${DEPS_FILE}, found upward from
+                                    here) or the refs given; marks what changed since the last check. --strict:
+                                    exit 1 unless everything is met. Ref: <project>/<task id>, <project>/tag:<tag>,
+                                    <project>/*
+  pb deps add <ref> [--why <text>] [--until done|closed|active|<state>]   add one to ${DEPS_FILE}
+  pb deps rm <ref>                  remove one (and stop showing as waiting on it)
+  pb deps --until-change [--every <s>] [--timeout <s>]   poll (default every 300 s, up to 6 h) and exit when
+                                    something changed; run it in the background to be woken
+  pb needed [--all] [--json]        this project's open tasks that other projects are waiting on
+`;
+
+// Flags that never take a value, so "pb deps --strict engine/83" keeps the ref.
+const BOOLEAN_FLAGS = new Set(['json', 'strict', 'until-change', 'dry-run', 'clear', 'fresh', 'hide', 'all', 'local', 'force', 'no-browser', 'unseen', 'meta', 'check', 'yes']);
+
+function args(argv) {
+	const out = { _: [] };
+	for (let i = 0; i < argv.length; i++) {
+		const a = argv[i];
+		if (a.startsWith('--')) {
+			const key = a.slice(2);
+			const next = argv[i + 1];
+			const val = BOOLEAN_FLAGS.has(key) || next === undefined || next.startsWith('--') ? true : (i++, next);
+			if (out[key] === undefined) {
+				out[key] = val;
+			} else {
+				out[key] = [].concat(out[key], val);
+			}
+		} else {
+			out._.push(a);
+		}
+	}
+	return out;
+}
+
+// The tokens pb login saved, one per server, so a token only ever goes to the server that issued it. Before 1.6.0 the
+// file held one token for the one server: that shape is read as an entry for its server.
+function loadCredentials() {
+	let f;
+	try {
+		f = JSON.parse(fs.readFileSync(CREDENTIALS, 'utf8'));
+	} catch {
+		return { servers: {} };
+	}
+	if (f.servers) {
+		return f;
+	}
+	const { token, id, name, created } = f;
+	const key = !f.server || cleanUrl(f.server) === cleanUrl(DEFAULT_LAN) ? HOME : cleanUrl(f.server);
+	return { servers: token && key ? { [key]: { token, id, name, created } } : {} };
+}
+
+function saveCredentials(store) {
+	fs.mkdirSync(CONFIG_DIR, { recursive: true });
+	const tmp = `${CREDENTIALS}.tmp-${process.pid}`;
+	fs.writeFileSync(tmp, JSON.stringify(store, null, '\t') + '\n', { mode: 0o600 });
+	fs.renameSync(tmp, CREDENTIALS);
+}
+
+// The home server's LAN address is the same server under another name.
+function credentialKey() {
+	return SERVER === cleanUrl(DEFAULT_LAN) ? HOME : SERVER;
+}
+
+// The token for this server (PB_TOKEN overrides it, for scripts and CI).
+function credentials() {
+	if (process.env.PB_TOKEN) {
+		return { token: process.env.PB_TOKEN, source: 'PB_TOKEN' };
+	}
+	const entry = loadCredentials().servers[credentialKey()];
+	return entry ? { ...entry, source: CREDENTIALS } : null;
+}
+
+function newerThan(a, b) {
+	const x = String(a).split('.').map(Number);
+	const y = String(b).split('.').map(Number);
+	for (let i = 0; i < Math.max(x.length, y.length); i++) {
+		if ((x[i] || 0) !== (y[i] || 0)) {
+			return (x[i] || 0) > (y[i] || 0);
+		}
+	}
+	return false;
+}
+
+let noticed = false;
+// Every answer names the server's current pb; say once per run when this one is older.
+function noticeNewer(res) {
+	const latest = res.headers.get('x-pb-cli-version');
+	// Only the home server's: pb upgrade comes from there, so another server's newer pb would be a notice nothing can clear.
+	if (!noticed && latest && !IS_SOURCE && SERVER === HOME && newerThan(latest, VERSION) && !['version', 'upgrade'].includes(process.argv[2])) {
+		noticed = true;
+		console.error(`pb: pb ${latest} is available (this is ${VERSION}): run pb upgrade`);
+	}
+}
+
+// One request to the server with the domain -> LAN fallback and the token. Returns {status, ok, data, res}.
+async function request(method, p, body, { raw = false, headers = {}, auth = true } = {}) {
+	if (!BASE) {
+		die(`no server for this project: run pb use <url> here (writes ${MARKER_FILE}), or set PB_URL`);
+	}
+	const cred = auth ? credentials() : null;
+	const send = () => fetch(BASE + p, {
+		method,
+		redirect: 'manual',
+		headers: { ...(raw ? {} : { 'Content-Type': 'application/json' }), ...(cred ? { Authorization: `Bearer ${cred.token}` } : {}), ...headers },
+		body: body === undefined ? undefined : raw ? body : JSON.stringify(body),
+	});
+	let res;
+	try {
+		res = await send();
+		if (fallback && !String(res.headers.get('content-type') || '').includes('application/json')) {
+			throw new Error(`${BASE} answered ${res.status} ${res.headers.get('content-type') || ''}, not the API`);
+		}
+	} catch (e) {
+		if (!fallback) {
+			die(`cannot reach ${BASE} (${e.cause ? e.cause.code || e.cause.message : e.message}): the board is unreachable, tell the user`, 2);
+		}
+		BASE = fallback;
+		fallback = null;
+		try {
+			res = await send();
+		} catch (e2) {
+			die(`cannot reach the server (${SERVER}: ${e.message}; LAN ${BASE}: ${e2.cause ? e2.cause.code || e2.cause.message : e2.message}): the board is unreachable, tell the user`, 2);
+		}
+	}
+	noticeNewer(res);
+	const text = await res.text();
+	let data;
+	try {
+		data = JSON.parse(text);
+	} catch {
+		data = text;
+	}
+	return { status: res.status, ok: res.ok, data, res };
+}
+
+async function api(method, p, body, opts = {}) {
+	const r = await request(method, p, body, opts);
+	if (r.status === 401) {
+		const cred = credentials();
+		die(`${method} ${p}: ${r.data && r.data.error ? r.data.error : 'login required'}${cred ? ` (the token from ${cred.source} was refused: pb login again)` : ''}`, 3);
+	}
+	if (!r.ok) {
+		die(`${method} ${p}: ${r.status} ${r.data && r.data.error ? r.data.error : r.data}`);
+	}
+	return r.data;
+}
+
+function sleep(ms) {
+	return new Promise((res) => setTimeout(res, ms));
+}
+
+async function healthAt(base) {
+	try {
+		const r = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(4000), redirect: 'manual' });
+		const d = await r.json();
+		return d && d.app === 'project-boards' ? d : null;
+	} catch {
+		return null;
+	}
+}
+
+// pb ensure: does the board answer? pb never starts a server. Exit 0 = up.
+async function ensure() {
+	if (!SERVER) {
+		die(`no server for this project: run pb use <url> here (writes ${MARKER_FILE}), or set PB_URL`);
+	}
+	if (await healthAt(SERVER)) {
+		console.log(`Project Boards up at ${SERVER}`);
+		return;
+	}
+	if (fallback && (await healthAt(fallback))) {
+		console.log(`Project Boards up at ${fallback} (but ${SERVER} does not answer as the board: check the proxy in front of it)`);
+		return;
+	}
+	die(`the board is unreachable at ${SERVER} (chosen by ${SERVER_SOURCE}): tell the user`, 2);
+}
+
+function openBrowser(url) {
+	const cmd = process.platform === 'darwin' ? ['open', [url]] : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] : ['xdg-open', [url]];
+	try {
+		const child = spawn(cmd[0], cmd[1], { stdio: 'ignore', detached: true });
+		child.on('error', () => {});
+		child.unref();
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+// pb login: the device flow. The server hands out a code and a link; the user opens it (pb opens it for them), signs
+// in, sees this machine's name and approves; meanwhile pb polls and saves the token it is given.
+async function login(o) {
+	const machine = os.hostname();
+	// Shown on the approval page. The project list needs a login already, so this cannot ask the server for it.
+	const project = typeof o.project === 'string' ? o.project : process.env.PB_PROJECT || path.basename(process.cwd());
+	const start = await request('POST', '/api/auth/device', { client: typeof o.name === 'string' ? o.name : 'pb', machine, project }, { auth: false });
+	if (!start.ok) {
+		die(`could not start signing in: ${start.data && start.data.error ? start.data.error : start.status}`);
+	}
+	const d = start.data;
+	console.log(`To sign this machine (${machine}) in to ${SERVER}, open:\n\n    ${d.verification_uri_complete}\n\nand approve the code ${d.user_code}. Waiting (up to ${Math.round(d.expires_in / 60)} minutes) ...`);
+	if (!o['no-browser'] && (process.platform !== 'linux' || process.env.DISPLAY || process.env.WAYLAND_DISPLAY)) {
+		openBrowser(d.verification_uri_complete);
+	}
+	let interval = d.interval * 1000;
+	const deadline = Date.now() + d.expires_in * 1000;
+	while (Date.now() < deadline) {
+		await sleep(interval);
+		const r = await request('POST', '/api/auth/token', { device_code: d.device_code }, { auth: false });
+		if (r.ok) {
+			const store = loadCredentials();
+			store.servers[credentialKey()] = { token: r.data.token, id: r.data.id, name: r.data.name, created: new Date().toISOString() };
+			saveCredentials(store);
+			console.log(`Signed in to ${SERVER} as "${r.data.name}". Token saved in ${CREDENTIALS}.`);
+			return;
+		}
+		const err = r.data && r.data.error;
+		if (err === 'slow_down') {
+			interval += 2000;
+		} else if (err === 'access_denied') {
+			die('the sign-in was denied on the page');
+		} else if (err === 'expired_token') {
+			die('the code expired before it was approved; run pb login again');
+		} else if (err !== 'authorization_pending') {
+			die(`signing in failed: ${err || r.status}`);
+		}
+	}
+	die('the code expired before it was approved; run pb login again');
+}
+
+async function logout() {
+	const cred = credentials();
+	if (!cred) {
+		console.log('not signed in on this machine');
+		return;
+	}
+	const r = await request('DELETE', '/api/auth/tokens/self');
+	if (cred.source === CREDENTIALS) {
+		const store = loadCredentials();
+		delete store.servers[credentialKey()];
+		saveCredentials(store);
+	}
+	console.log(r.ok ? `signed out (token "${cred.name || cred.id || ''}" revoked)` : `forgot the local token (the server said: ${r.data && r.data.error ? r.data.error : r.status})`);
+}
+
+async function whoami() {
+	const me = await api('GET', '/api/auth/me');
+	const cred = credentials();
+	const line = me.signedIn ? `signed in: ${me.kind} "${me.name}" (${me.id})` : `not signed in${cred ? ` (a token is saved in ${cred.source} but the server does not accept it: pb login)` : ' (pb login)'}`;
+	console.log(`${line}\nserver ${BASE} (${me.server}); logins ${me.mode}${me.mode === 'required' ? '' : me.mode === 'optional' ? ' (not required yet)' : ' (turned off)'}`);
+}
+
+// pb use <url>: write the project's marker file, in the one that already applies here or else in this directory.
+async function use(url, o) {
+	const server = cleanUrl(url);
+	if (!/^https?:\/\/\S+$/.test(server)) {
+		die('usage: pb use <http(s) url of the board> [--project <slug>]');
+	}
+	const h = await healthAt(server);
+	if (!h) {
+		die(`${server} does not answer as a Project Boards server`);
+	}
+	if (server.startsWith('http://') && !/^http:\/\/(localhost|127\.|\[::1\])/.test(server)) {
+		console.error(`pb: ${server} is plain http: the login token would cross the network unencrypted`);
+	}
+	const file = marker ? marker.file : path.join(process.cwd(), MARKER_FILE);
+	const { file: _, ...had } = marker || {};
+	const next = { ...had, server };
+	if (typeof o.project === 'string') {
+		next.project = o.project;
+	}
+	fs.writeFileSync(file, JSON.stringify(next, null, '\t') + '\n');
+	console.log(`${file}: this project now uses ${server} (Project Boards ${h.version})${next.project ? `, project ${next.project}` : ''}\nCommit that file. It holds no secrets. Sign this machine in if it is new to this server: pb login`);
+}
+
+async function where(o) {
+	const logged = credentials();
+	console.log(`server   ${SERVER || '(none: pb use <url>)'}\nfrom     ${SERVER_SOURCE}`);
+	console.log(`login    ${logged ? `yes (${logged.name || logged.source})` : 'none on this machine: pb login'}`);
+	console.log(`project  ${(typeof o.project === 'string' && o.project) || process.env.PB_PROJECT || (marker && marker.project) || (SERVER ? (await findProject(o)) || '(none)' : '(none)')}`);
+	console.log(`pb home  ${HOME || '(source copy)'} (pb upgrade comes from here)`);
+}
+
+// pb version and pb upgrade talk to the server this pb came from, whichever server the project uses.
+function useHome() {
+	if (HOME && !process.env.PB_URL) {
+		BASE = HOME;
+		fallback = DEFAULT_LAN || null;
+	}
+}
+
+async function version(o) {
+	console.log(`pb ${VERSION}${o.local ? '' : ` (${SELF}${IS_SOURCE ? ', the server\'s own copy' : ''})`}`);
+	if (o.local) {
+		return;
+	}
+	useHome();
+	const info = await api('GET', '/api/pb', undefined, { auth: false });
+	if (newerThan(info.version, VERSION)) {
+		console.log(`the server has pb ${info.version}: ${IS_SOURCE ? 'this is the source copy; save bin/pb to publish' : 'pb upgrade'}`);
+	} else {
+		console.log(`up to date with the server (${BASE}, pb ${info.version})`);
+	}
+}
+
+// pb upgrade: download the server's pb, check it against the published sha256, replace this file in one rename.
+async function upgrade(o) {
+	if (IS_SOURCE) {
+		die(`this is the server's own copy (${SELF}): it is what the server publishes, so there is nothing to upgrade`);
+	}
+	useHome();
+	const info = await api('GET', '/api/pb', undefined, { auth: false });
+	if (!newerThan(info.version, VERSION) && !o.force) {
+		console.log(`pb ${VERSION} is current (the server has ${info.version}); --force reinstalls`);
+		return;
+	}
+	const res = await fetch(`${BASE}/pb`);
+	const buf = Buffer.from(await res.arrayBuffer());
+	if (!res.ok || crypto.createHash('sha256').update(buf).digest('hex') !== info.sha256) {
+		die('the download does not match the published checksum (the server may have just changed it); try again');
+	}
+	const tmp = path.join(path.dirname(SELF), `.pb.upgrade.${process.pid}`);
+	fs.writeFileSync(tmp, buf, { mode: 0o755 });
+	fs.renameSync(tmp, SELF);
+	console.log(`pb ${VERSION} -> ${info.version} (${SELF})`);
+}
+
+function die(msg, code = 1) {
+	console.error(`pb: ${msg}`);
+	process.exit(code);
+}
+
+async function resolveProject(o) {
+	const slug = await findProject(o);
+	if (!slug) {
+		die('no project for this directory: pass --project <slug>, set PB_PROJECT, or register one (pb register)');
+	}
+	return slug;
+}
+
+async function findProject(o) {
+	if (typeof o.project === 'string') {
+		return o.project;
+	}
+	if (process.env.PB_PROJECT) {
+		return process.env.PB_PROJECT;
+	}
+	const list = await api('GET', '/api/projects');
+	const cwd = fs.realpathSync(process.cwd());
+	let best = null;
+	for (const p of list) {
+		if (!p.path) {
+			continue;
+		}
+		let real;
+		try {
+			real = fs.realpathSync(p.path);
+		} catch {
+			continue;
+		}
+		if ((cwd === real || cwd.startsWith(real + path.sep)) && (!best || real.length > best.len)) {
+			best = { slug: p.slug, len: real.length };
+		}
+	}
+	return best ? best.slug : null;
+}
+
+const enc = encodeURIComponent;
+
+function list(v) {
+	return v === undefined ? [] : [].concat(v);
+}
+
+function pad(s, n) {
+	s = String(s ?? '');
+	return s.length >= n ? s.slice(0, n) : s + ' '.repeat(n - s.length);
+}
+
+function printTasks(tasks) {
+	const order = { active: 0, todo: 1, done: 2 };
+	tasks.sort((a, b) => order[a.status] - order[b.status] || String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
+	for (const t of tasks) {
+		const needed = t.neededBy ? `  [needed by ${[...new Set(t.neededBy.map((w) => w.from))].join(', ')}]` : '';
+		console.log(`${pad(t.status, 6)} ${pad(t.id, 6)} ${pad(t.state, 24)} ${pad(t.owner, 12)} ${t.title}${needed}`);
+	}
+	console.log(`(${tasks.length} tasks)`);
+}
+
+function ago(iso) {
+	const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+	if (!iso || !Number.isFinite(s)) {
+		return '';
+	}
+	return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Docs
+
+const DOC_EXT = { md: 'markdown', markdown: 'markdown', html: 'html', htm: 'html', svg: 'svg', json: 'json', csv: 'csv', txt: 'text', log: 'text' };
+
+function printEditedDocs(list) {
+	if (!list.length) {
+		return;
+	}
+	console.log(`Docs the user edited that you have not read (${list.length}): read each with pb doc <id>`);
+	for (const d of list) {
+		console.log(`  ${pad(d.id, 28)} v${pad(d.version, 4)} ${d.title}  [edited ${ago(d.userUpdatedAt)}]`);
+	}
+}
+
+// Docs the user edited and Claude has not read; [] from a server without docs (before 1.3.0), so inbox and wait work there.
+async function editedDocs(slug) {
+	const r = await request('GET', `/api/projects/${enc(slug)}/docs?unseen=1`);
+	return r.ok && Array.isArray(r.data) ? r.data : [];
+}
+
+async function docsCommand(o) {
+	const slug = await resolveProject(o);
+	const q = new URLSearchParams();
+	if (typeof o.tag === 'string') {
+		q.set('tag', o.tag);
+	}
+	if (o.unseen) {
+		q.set('unseen', '1');
+	}
+	const list = await api('GET', `/api/projects/${enc(slug)}/docs${q.toString() ? `?${q}` : ''}`);
+	if (o.json) {
+		console.log(JSON.stringify(list, null, 2));
+		return;
+	}
+	for (const d of list) {
+		const unseen = d.userUpdatedAt && (!d.seenAt || d.userUpdatedAt > d.seenAt) ? '  [edited by the user, unread]' : '';
+		console.log(`${pad(d.id, 28)} ${pad(d.format === 'code' && d.language ? d.language : d.format, 9)} v${pad(d.version, 4)} ${pad(ago(d.updated), 11)} ${pad(d.updatedBy, 7)} ${d.title}${d.share ? '  [shared]' : ''}${unseen}`);
+	}
+	console.log(`(${list.length} docs)`);
+}
+
+async function docCommand(o) {
+	const [sub, ...rest] = o._;
+	const slug = await resolveProject(o);
+	const base = `/api/projects/${enc(slug)}/docs`;
+	if (sub === 'put') {
+		const file = rest[0];
+		if (!file) {
+			die('pb doc put <file|-> [--id <id>] [--title <t>] [--format <f>] ...');
+		}
+		const content = file === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(file, 'utf8');
+		const name = file === '-' ? '' : path.basename(file);
+		const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+		const id = typeof o.id === 'string' ? o.id : name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+		if (!id) {
+			die('reading stdin: give the doc an --id');
+		}
+		const existing = await request('GET', `${base}/${enc(id)}`);
+		if (!existing.ok && existing.status !== 404) {
+			die(`GET ${base}/${id}: ${existing.status} ${existing.data && existing.data.error}`, existing.status === 401 ? 3 : 1);
+		}
+		const body = { content };
+		const format = typeof o.format === 'string' ? o.format : existing.ok ? undefined : DOC_EXT[ext] || (ext ? 'code' : 'text');
+		if (format) {
+			body.format = format;
+		}
+		if (typeof o.language === 'string') {
+			body.language = o.language;
+		} else if (!existing.ok && format === 'code') {
+			body.language = ext;
+		}
+		// A new doc's title: --title, else its first markdown heading, else the file name. An existing doc keeps its
+		// title (the user may have changed it) unless --title is given.
+		if (typeof o.title === 'string') {
+			body.title = o.title;
+		} else if (!existing.ok) {
+			const h = format === 'markdown' && /^#\s+(.+)$/m.exec(content);
+			body.title = h ? h[1].trim() : name || id;
+		}
+		if (o.tag !== undefined) {
+			body.tags = list(o.tag).map(String);
+		}
+		for (const k of ['summary', 'note']) {
+			if (typeof o[k] === 'string') {
+				body[k] = o[k];
+			}
+		}
+		if (o['if-version'] !== undefined) {
+			body.ifVersion = Number(o['if-version']);
+		}
+		const d = await api('PUT', `${base}/${enc(id)}`, body);
+		console.log(`${existing.ok ? (d.version === existing.data.version ? 'unchanged' : 'updated') : 'created'} doc ${d.id} v${d.version} (${d.format}): ${BASE}/d/${enc(slug)}/${enc(d.id)}`);
+		if (existing.ok && existing.data.userUpdatedAt && (!existing.data.seenAt || existing.data.userUpdatedAt > existing.data.seenAt)) {
+			console.error(`pb: note: the user had edited ${d.id} (v${existing.data.version}) and you had not read it; their edit is in pb doc history ${d.id}`);
+		}
+		return;
+	}
+	if (sub === 'rm') {
+		console.log(JSON.stringify(await api('DELETE', `${base}/${enc(rest[0])}`)));
+		return;
+	}
+	if (sub === 'history') {
+		for (const h of await api('GET', `${base}/${enc(rest[0])}/history`)) {
+			console.log(`v${pad(h.version, 4)} ${pad(new Date(h.at).toLocaleString(), 22)} ${pad(h.by, 7)} ${pad(`${Math.ceil(h.size / 1024)} KB`, 7)} ${h.note || ''}`);
+		}
+		return;
+	}
+	if (sub === 'url') {
+		console.log(`${BASE}/d/${enc(slug)}/${enc(rest[0])}\n${BASE}${base}/${enc(rest[0])}/raw`);
+		return;
+	}
+	const id = sub;
+	if (!id) {
+		die('pb doc <id> | pb doc put <file> | pb doc rm|history|url <id> (pb docs lists them)');
+	}
+	const v = o.version !== undefined ? `?version=${enc(o.version)}` : '';
+	const d = await api('GET', `${base}/${enc(id)}${v}`);
+	if (!d.old) {
+		await api('POST', `${base}/${enc(id)}/seen`);
+	}
+	if (o.meta) {
+		const { content: _c, ...m } = d;
+		console.log(JSON.stringify(m, null, 2));
+	} else if (typeof o.out === 'string') {
+		fs.writeFileSync(o.out, d.content);
+		console.log(`${id} v${d.version} -> ${o.out}`);
+	} else {
+		process.stdout.write(d.content.endsWith('\n') ? d.content : `${d.content}\n`);
+	}
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Dependencies: pb-deps.json in the depending project ({from, deps: [{ref, why, until}]}), and what each task looked
+// like at the last check, kept in ~/.cache so the next check can say what changed.
+
+function findDepsFile(o) {
+	if (typeof o.file === 'string') {
+		return path.resolve(o.file);
+	}
+	for (let dir = process.cwd(); ; dir = path.dirname(dir)) {
+		const f = path.join(dir, DEPS_FILE);
+		if (fs.existsSync(f)) {
+			return f;
+		}
+		if (dir === path.dirname(dir)) {
+			return null;
+		}
+	}
+}
+
+// Where `pb deps add` creates the file: the repository root, else the current directory.
+function newDepsFilePath() {
+	for (let dir = process.cwd(); ; dir = path.dirname(dir)) {
+		if (fs.existsSync(path.join(dir, '.git'))) {
+			return path.join(dir, DEPS_FILE);
+		}
+		if (dir === path.dirname(dir)) {
+			return path.join(process.cwd(), DEPS_FILE);
+		}
+	}
+}
+
+function readDepsFile(file) {
+	const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+	return { from: typeof data.from === 'string' ? data.from : '', deps: Array.isArray(data.deps) ? data.deps : [] };
+}
+
+function writeDepsFile(file, data) {
+	fs.writeFileSync(file, JSON.stringify(data, null, '\t') + '\n');
+}
+
+// Who is asking, as shown to the project that owns the task: --as, the file's "from", the registered project for this
+// directory, else the folder name.
+async function depsFrom(o, file, data) {
+	if (typeof o.as === 'string') {
+		return o.as;
+	}
+	if (data && data.from) {
+		return data.from;
+	}
+	return (await findProject(o)) || path.basename(file ? path.dirname(file) : process.cwd());
+}
+
+function seenFile(key) {
+	const dir = path.join(process.env.XDG_CACHE_HOME || path.join(require('os').homedir(), '.cache'), 'project-boards', 'deps');
+	return path.join(dir, `${require('crypto').createHash('sha1').update(key).digest('hex').slice(0, 16)}.json`);
+}
+
+function taskSignature(t) {
+	return `${t.status}|${t.resolution || ''}|${t.state}`;
+}
+
+// Compares a check with the last one: per ref, per task, "new" (appeared) or the state it had before. A ref checked
+// for the first time reports nothing, so the first run is a baseline rather than a wall of changes.
+function diffChecks(result, seen) {
+	const changes = new Map();
+	for (const d of result.deps) {
+		const before = seen[d.ref];
+		if (!before) {
+			continue;
+		}
+		for (const t of d.tasks) {
+			if (!before[t.id]) {
+				changes.set(`${d.ref}:${t.id}`, 'new');
+			} else if (before[t.id] !== taskSignature(t)) {
+				changes.set(`${d.ref}:${t.id}`, `was ${before[t.id].split('|')[2] || before[t.id].split('|')[0]}`);
+			}
+		}
+	}
+	return changes;
+}
+
+function seenOf(result) {
+	const out = {};
+	for (const d of result.deps) {
+		out[d.ref] = Object.fromEntries(d.tasks.map((t) => [t.id, taskSignature(t)]));
+	}
+	return out;
+}
+
+function depLabel(d) {
+	if (d.error) {
+		return 'ERROR';
+	}
+	if (d.met) {
+		return 'met';
+	}
+	return d.dropped ? 'DROPPED' : 'waiting';
+}
+
+function printDeps(result, changes, from) {
+	const met = result.deps.filter((d) => d.met).length;
+	console.log(`${from} waits on ${result.deps.length}: ${met} met, ${result.deps.length - met} not${changes.size ? `; ${changes.size} changed since the last check` : ''}`);
+	for (const d of result.deps) {
+		const single = d.tasks.length === 1 && !/\/(\*|tag:)/.test(d.ref);
+		const head = `  ${pad(depLabel(d), 8)} ${pad(d.ref, 26)}`;
+		if (d.error || d.note) {
+			console.log(`${head} ${d.error || d.note}${d.why ? `  (why: ${d.why})` : ''}`);
+			continue;
+		}
+		const line = (t, prefix) => {
+			const c = changes.get(`${d.ref}:${t.id}`);
+			return `${prefix}${pad(t.state, 34)} ${t.title}${c ? `   <- CHANGED (${c})` : ''}`;
+		};
+		if (single) {
+			console.log(`${line(d.tasks[0], `${head} `)}${!d.met && d.why ? `\n${' '.repeat(38)}why: ${d.why}` : ''}`);
+			continue;
+		}
+		console.log(`${head} ${d.tasks.filter((t) => t.met).length}/${d.tasks.length} ${d.until}${!d.met && d.why ? `  (why: ${d.why})` : ''}`);
+		for (const t of d.tasks) {
+			console.log(line(t, `      ${pad(t.met ? 'met' : t.resolution === 'dropped' ? 'DROPPED' : 'waiting', 8)} ${pad(`#${t.id}`, 8)}`));
+		}
+	}
+	if (result.deps.some((d) => d.dropped)) {
+		console.log('DROPPED: closed without being done (won\'t fix, superseded, ...); re-plan instead of waiting.');
+	}
+}
+
+async function deps(o) {
+	const [sub, ...refs] = o._;
+	let file = findDepsFile(o);
+	if (sub === 'add' || sub === 'rm') {
+		const ref = refs[0];
+		if (!ref) {
+			die(`pb deps ${sub} <project>/<task id>|tag:<tag>|*`);
+		}
+		file = file || newDepsFilePath();
+		const data = fs.existsSync(file) ? readDepsFile(file) : { from: await depsFrom(o, file, null), deps: [] };
+		const rest = data.deps.filter((d) => (typeof d === 'string' ? d : d.ref) !== ref);
+		if (sub === 'add') {
+			const entry = { ref };
+			if (typeof o.why === 'string') {
+				entry.why = o.why;
+			}
+			if (typeof o.until === 'string') {
+				entry.until = o.until;
+			}
+			data.deps = [...rest, entry];
+			writeDepsFile(file, data);
+			const r = await api('POST', '/api/deps', { from: data.from, deps: [entry] });
+			console.log(`${file}: waiting on ${ref} (${depLabel(r.deps[0])}${r.deps[0].error ? `: ${r.deps[0].error}` : ''})`);
+		} else {
+			if (rest.length === data.deps.length) {
+				die(`${ref} is not in ${file}`);
+			}
+			data.deps = rest;
+			writeDepsFile(file, data);
+			await api('DELETE', `/api/deps?from=${enc(data.from)}&ref=${enc(ref)}`);
+			console.log(`${file}: no longer waiting on ${ref}`);
+		}
+		return;
+	}
+	const adhoc = [sub, ...refs].filter(Boolean);
+	let list;
+	let data = null;
+	if (adhoc.length) {
+		list = adhoc.map((ref) => ({ ref, until: typeof o.until === 'string' ? o.until : undefined }));
+	} else {
+		if (!file) {
+			die(`no ${DEPS_FILE} here or above; add one with: pb deps add <project>/<task id> --why "..." (or pass refs: pb deps engine/83)`);
+		}
+		data = readDepsFile(file);
+		list = data.deps.map((d) => (typeof d === 'string' ? { ref: d } : d));
+		if (!list.length) {
+			die(`${file} lists no deps; add one with: pb deps add <ref>`);
+		}
+	}
+	const from = await depsFrom(o, file, data);
+	const key = adhoc.length ? `adhoc:${from}:${adhoc.join(',')}` : file;
+	const store = seenFile(key);
+	const loadSeen = () => {
+		try {
+			return JSON.parse(fs.readFileSync(store, 'utf8')).seen || {};
+		} catch {
+			return {};
+		}
+	};
+	const check = async () => {
+		const result = await api('POST', '/api/deps', { from, deps: list });
+		const changes = diffChecks(result, loadSeen());
+		fs.mkdirSync(path.dirname(store), { recursive: true });
+		fs.writeFileSync(store, JSON.stringify({ key, checked: result.checked, seen: seenOf(result) }, null, '\t') + '\n');
+		return { result, changes };
+	};
+	const show = ({ result, changes }) => {
+		if (o.json) {
+			console.log(JSON.stringify({ ...result, changed: Object.fromEntries(changes) }, null, 2));
+		} else {
+			printDeps(result, changes, from);
+		}
+	};
+	if (o['until-change']) {
+		const every = Math.max(30, Number(o.every || 300)) * 1000;
+		const deadline = Date.now() + Math.max(60, Number(o.timeout || 6 * 3600)) * 1000;
+		for (;;) {
+			const r = await check();
+			if (r.changes.size) {
+				show(r);
+				return;
+			}
+			if (Date.now() + every > deadline) {
+				console.log(`no change in what ${from} waits on before the timeout`);
+				show(r);
+				return;
+			}
+			await new Promise((res) => setTimeout(res, every));
+		}
+	}
+	const r = await check();
+	show(r);
+	if (o.strict && !r.result.met) {
+		process.exit(1);
+	}
+}
+
+function printHandoff(h) {
+	const ans = h.kind === 'steps'
+		? Object.entries(h.stepAnswers || {}).filter(([, s]) => s.state || s.note).map(([i, s]) => `step ${Number(i) + 1}: ${s.state || '-'}${s.note ? ` (${s.note})` : ''}`).join('; ')
+		: `${h.answer ?? ''}${h.note ? ` | note: ${h.note}` : ''}`;
+	// In the inbox with nothing left in it: the user cleared the answer.
+	const withdrawn = h.state === 'answered' && h.kind !== 'message' && !ans.trim();
+	console.log(`[${withdrawn ? 'withdrawn' : h.state || ''}] ${h.id} (${h.kind}${h.lane ? `, ${h.lane}` : ''}): ${h.title || h.question}`);
+	if (ans.trim()) {
+		console.log(`    answer: ${ans}`);
+	}
+	if (withdrawn) {
+		console.log('    the user cleared their answer: stop acting on it, it is unanswered again (then pb ack)');
+	}
+}
+
+// Task files: "# <id>-<slug>[: title]" then "Key: value" header lines (State, Owner, Claimed, Needs, Branch, Results).
+function parseTaskFile(file) {
+	const text = fs.readFileSync(file, 'utf8');
+	const base = path.basename(file, '.md');
+	const m = /^([A-Za-z0-9]+[a-z]?)(?:-(.*))?$/.exec(base);
+	if (!m) {
+		return null;
+	}
+	const id = m[1];
+	const lines = text.split('\n');
+	let title = '';
+	const head = {};
+	let i = 0;
+	for (; i < Math.min(lines.length, 40); i++) {
+		const l = lines[i];
+		if (!title && /^#\s+/.test(l)) {
+			title = l.replace(/^#\s+/, '').trim();
+			continue;
+		}
+		const hm = /^(State|Owner|Claimed|Needs|Branch|Results|Priority):\s*(.*)$/.exec(l);
+		if (hm) {
+			head[hm[1].toLowerCase()] = hm[2].trim();
+		} else if (title && l.trim() && Object.keys(head).length && !hm) {
+			break;
+		}
+	}
+	// "# 99-cell-not-rendered: An interior can come up empty" -> keep the readable part.
+	const colon = title.indexOf(': ');
+	if (colon > 0 && title.slice(0, colon).startsWith(id)) {
+		title = title.slice(colon + 2);
+	} else if (title === base) {
+		title = (m[2] || base).replace(/-/g, ' ');
+	}
+	// The board shows the header fields itself; keep the rest of the file as the task's details.
+	const body = lines.filter((l, n) => !(n < 40 && (/^#\s+/.test(l) && n === lines.findIndex((x) => /^#\s+/.test(x)) || /^(State|Owner|Claimed|Needs|Branch|Results|Priority):/.test(l)))).join('\n').replace(/^\s+/, '');
+	return {
+		id, title: title || base, state: head.state || 'open', owner: head.owner || '', claimed: head.claimed || '',
+		needs: head.needs || '', branch: head.branch || '', results: head.results || '', file: path.resolve(file),
+		body,
+	};
+}
+
+function askYesNo(question) {
+	return new Promise((resolve) => {
+		const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+		rl.question(question, (answer) => {
+			rl.close();
+			resolve(/^y(es)?$/i.test(answer.trim()));
+		});
+	});
+}
+
+async function fetchRelease(url, what) {
+	let res;
+	try {
+		res = await fetch(url, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': `pb/${VERSION}` }, signal: AbortSignal.timeout(60000) });
+	} catch (e) {
+		die(`could not fetch ${what} (${e.cause ? e.cause.code || e.cause.message : e.message})`, 2);
+	}
+	if (res.status === 404 && what === 'the release list') {
+		return null;
+	}
+	if (!res.ok) {
+		die(`could not fetch ${what}: ${res.status}`, 2);
+	}
+	return res;
+}
+
+// pb self-update: offer the latest GitHub release and replace this file if the user accepts. Without a terminal there
+// is nobody to ask, so it stops short: a session asks the user, and passes --yes only once they have agreed.
+async function selfUpdate(o) {
+	if (IS_SOURCE) {
+		die(`this is the server's own copy (${SELF}): update the server instead`);
+	}
+	const found = await fetchRelease(RELEASES_URL, 'the release list');
+	const release = found && (await found.json());
+	if (!release) {
+		console.log('no releases published yet');
+		return;
+	}
+	const latest = String(release.tag_name || '').replace(/^v/, '');
+	if (!/^\d+\.\d+\.\d+$/.test(latest)) {
+		die(`the latest release has an unexpected tag: ${release.tag_name}`);
+	}
+	if (!newerThan(latest, VERSION)) {
+		console.log(`pb ${VERSION} is current (latest release: ${latest})`);
+		return;
+	}
+	console.log(`pb ${latest} is available (this is ${VERSION}).${release.html_url ? ` ${release.html_url}` : ''}\n`);
+	console.log(`${String(release.body || '').split('\n').slice(0, 20).join('\n')}\n`);
+	if (o.check) {
+		return;
+	}
+	if (!o.yes) {
+		if (!process.stdin.isTTY) {
+			console.log('Not installed. Ask the user first; if they agree, run: pb self-update --yes');
+			return;
+		}
+		if (!(await askYesNo(`Install pb ${latest} over ${SELF}? [y/N] `))) {
+			console.log('Not installed.');
+			return;
+		}
+	}
+	const asset = (name) => (release.assets || []).find((a) => a.name === name);
+	if (!asset('pb') || !asset('pb.sha256')) {
+		die(`release ${latest} has no pb download`);
+	}
+	const buf = Buffer.from(await (await fetchRelease(asset('pb').browser_download_url, 'pb')).arrayBuffer());
+	const want = (await (await fetchRelease(asset('pb.sha256').browser_download_url, 'the checksum')).text()).trim().split(/\s+/)[0];
+	if (crypto.createHash('sha256').update(buf).digest('hex') !== want) {
+		die('the download does not match the release checksum; nothing was changed');
+	}
+	const text = buf.toString('utf8');
+	if (!text.startsWith('#!/usr/bin/env node') || !text.includes(`const VERSION = '${latest}';`)) {
+		die(`the download is not pb ${latest}; nothing was changed`);
+	}
+	// A release's pb names no server: keep the home this copy was given.
+	const stamped = text
+		.replace(/^const DEFAULT_SERVER = '.*';$/m, () => `const DEFAULT_SERVER = '${DEFAULT_SERVER}';`)
+		.replace(/^const DEFAULT_LAN = '.*';$/m, () => `const DEFAULT_LAN = '${DEFAULT_LAN}';`);
+	const tmp = path.join(path.dirname(SELF), `.pb.self-update.${process.pid}`);
+	fs.writeFileSync(tmp, stamped, { mode: 0o755 });
+	fs.renameSync(tmp, SELF);
+	console.log(`pb ${VERSION} -> ${latest} (${SELF})`);
+}
+
+async function main() {
+	const [cmd, ...rest] = process.argv.slice(2);
+	const o = args(rest);
+	switch (cmd) {
+		case undefined:
+		case 'help':
+		case '--help':
+		case '-h':
+			console.log(HELP);
+			return;
+		case 'self-update':
+			await selfUpdate(o);
+			return;
+		case 'use':
+			await use(rest[0], o);
+			return;
+		case 'where':
+			await where(o);
+			return;
+		case 'ensure':
+			await ensure();
+			return;
+		case 'health':
+			console.log(JSON.stringify(await api('GET', '/api/health', undefined, { auth: false })));
+			return;
+		case 'login':
+			await login(o);
+			return;
+		case 'logout':
+			await logout();
+			return;
+		case 'whoami':
+			await whoami();
+			return;
+		case 'version':
+		case '--version':
+			await version(o);
+			return;
+		case 'upgrade':
+			await upgrade(o);
+			return;
+		case 'projects':
+			for (const p of await api('GET', '/api/projects')) {
+				console.log(`${pad(p.slug, 22)} ${pad(p.name, 28)} subagents<=${p.maxSubagents}  todo ${p.counts.todo} active ${p.counts.active} done ${p.counts.done}  inbox ${p.counts.inbox}  ${p.path}`);
+			}
+			return;
+		case 'register': {
+			const slug = o._[0];
+			if (!slug) {
+				die('pb register <slug> --name <name> [--path <dir>]');
+			}
+			const body = { slug, name: o.name || slug, path: o.path ? path.resolve(o.path) : process.cwd() };
+			if (o.description) {
+				body.description = o.description;
+			}
+			if (o.lanes) {
+				body.lanes = String(o.lanes).split(',').map((s) => s.trim()).filter(Boolean).map((n) => ({ id: n.toLowerCase().replace(/[^a-z0-9]+/g, '-'), name: n }));
+			}
+			if (o['max-subagents'] !== undefined) {
+				body.maxSubagents = Number(o['max-subagents']);
+			}
+			console.log(JSON.stringify(await api('POST', '/api/projects', body), null, 2));
+			return;
+		}
+		case 'settings':
+			console.log(JSON.stringify(await api('GET', `/api/projects/${enc(await resolveProject(o))}`), null, 2));
+			return;
+		case 'set': {
+			const body = {};
+			if (o['max-subagents'] !== undefined) {
+				body.maxSubagents = Number(o['max-subagents']);
+			}
+			for (const k of ['banner', 'name', 'description']) {
+				if (o[k] !== undefined) {
+					body[k] = o[k] === true ? '' : o[k];
+				}
+			}
+			if (o.path) {
+				body.path = path.resolve(o.path);
+			}
+			if (o.lanes !== undefined) {
+				body.lanes = String(o.lanes === true ? '' : o.lanes).split(',').map((s) => s.trim()).filter(Boolean);
+			}
+			console.log(JSON.stringify(await api('PATCH', `/api/projects/${enc(await resolveProject(o))}`, body), null, 2));
+			return;
+		}
+		case 'busy': {
+			const [lane, ...text] = o._;
+			if (!lane) {
+				die('pb busy <lane|all> <text> | pb busy <lane> --clear');
+			}
+			const value = o.clear ? '' : text.join(' ') || 'Claude is using this - please leave it alone';
+			await api('PATCH', `/api/projects/${enc(await resolveProject(o))}`, { busy: { [lane]: value } });
+			console.log(o.clear ? `cleared ${lane}` : `busy ${lane}: ${value}`);
+			return;
+		}
+		case 'agents': {
+			const slug = await resolveProject(o);
+			const p = await api('GET', `/api/projects/${enc(slug)}`);
+			const active = await api('GET', `/api/projects/${enc(slug)}/tasks?status=active`);
+			const owners = [...new Set(active.map((t) => t.owner).filter((x) => x && !/^lead\b/i.test(x)))];
+			console.log(`maxSubagents ${p.maxSubagents}; tasks being worked on ${active.length}; non-lead owners ${owners.length}${owners.length ? `: ${owners.join(', ')}` : ''}`);
+			return;
+		}
+		case 'tasks': {
+			const slug = await resolveProject(o);
+			const q = typeof o.status === 'string' ? `?status=${enc(o.status)}` : '';
+			const tasks = await api('GET', `/api/projects/${enc(slug)}/tasks${q}`);
+			if (o.json) {
+				console.log(JSON.stringify(tasks, null, 2));
+			} else {
+				printTasks(tasks);
+			}
+			return;
+		}
+		case 'task': {
+			const t = await api('GET', `/api/projects/${enc(await resolveProject(o))}/tasks/${enc(o._[0])}`);
+			console.log(JSON.stringify(t, null, 2));
+			return;
+		}
+		case 'add':
+		case 'update': {
+			const slug = await resolveProject(o);
+			const body = {};
+			for (const k of ['title', 'state', 'status', 'owner', 'claimed', 'branch', 'results', 'needs', 'summary', 'priority', 'source', 'note']) {
+				if (typeof o[k] === 'string') {
+					body[k] = o[k];
+				}
+			}
+			if (o.file) {
+				body.file = path.resolve(o.file);
+			}
+			if (o['body-file']) {
+				body.body = fs.readFileSync(o['body-file'], 'utf8');
+			}
+			// --tag adds and --untag removes (both repeatable), so "pb update 83 --tag demo-app" keeps the other tags.
+			if (o.tag !== undefined || o.untag !== undefined) {
+				const current = cmd === 'update' && o._[0] ? (await api('GET', `/api/projects/${enc(slug)}/tasks/${enc(o._[0])}`)).tags || [] : [];
+				const drop = new Set(list(o.untag).map(String));
+				body.tags = [...new Set([...current, ...list(o.tag).map(String)])].filter((t) => !drop.has(t));
+			}
+			if (cmd === 'add') {
+				if (o.id) {
+					body.id = String(o.id);
+				}
+				const t = await api('POST', `/api/projects/${enc(slug)}/tasks`, body);
+				console.log(`created task ${t.id} [${t.status}] ${t.title}`);
+			} else {
+				const id = o._[0];
+				if (!id) {
+					die('pb update <id> --state ...');
+				}
+				const t = await api('PATCH', `/api/projects/${enc(slug)}/tasks/${enc(id)}`, body);
+				console.log(`task ${t.id} [${t.status}] ${t.state} ${t.owner ? `(${t.owner})` : ''}`);
+			}
+			return;
+		}
+		case 'rm':
+			console.log(JSON.stringify(await api('DELETE', `/api/projects/${enc(await resolveProject(o))}/tasks/${enc(o._[0])}`)));
+			return;
+		case 'import-md': {
+			const dir = o._[0];
+			if (!dir) {
+				die('pb import-md <dir>');
+			}
+			const tasks = fs.readdirSync(dir).filter((f) => f.endsWith('.md') && !/^readme/i.test(f)).map((f) => parseTaskFile(path.join(dir, f))).filter(Boolean);
+			if (o['dry-run']) {
+				// The column rules live on the server (lib/status.js), so an installed pb asks it rather than carrying a copy.
+				const { statuses } = await api('POST', '/api/status-of', { states: tasks.map((t) => t.state) });
+				printTasks(tasks.map((t, i) => ({ ...t, status: statuses[i] })));
+				return;
+			}
+			const r = await api('POST', `/api/projects/${enc(await resolveProject(o))}/tasks/import`, { tasks });
+			console.log(`import-md ${dir}: ${tasks.length} files -> created ${r.created}, updated ${r.updated}, unchanged ${r.unchanged}${r.errors.length ? `, errors ${JSON.stringify(r.errors)}` : ''}`);
+			return;
+		}
+		case 'import-json': {
+			const data = JSON.parse(fs.readFileSync(o._[0], 'utf8'));
+			const r = await api('POST', `/api/projects/${enc(await resolveProject(o))}/tasks/import`, { tasks: Array.isArray(data) ? data : data.tasks });
+			console.log(JSON.stringify(r));
+			return;
+		}
+		case 'upload': {
+			const file = o._[0];
+			if (!file) {
+				die('pb upload <file>');
+			}
+			const r = await api('POST', `/api/projects/${enc(await resolveProject(o))}/media?name=${enc(path.basename(file))}`, fs.readFileSync(file), { raw: true, headers: { 'Content-Type': 'application/octet-stream' } });
+			console.log(r.url);
+			return;
+		}
+		case 'ask': {
+			const slug = await resolveProject(o);
+			const body = { kind: typeof o.kind === 'string' ? o.kind : 'choice' };
+			for (const k of ['id', 'title', 'question', 'context', 'default', 'lane', 'source', 'ref']) {
+				if (typeof o[k] === 'string') {
+					body[k] = o[k];
+				}
+			}
+			const choices = list(o.choice).map((c) => {
+				const [label, ...d] = String(c).split('|');
+				return { label: label.trim(), detail: d.join('|').trim() };
+			});
+			if (choices.length) {
+				body.choices = choices;
+			}
+			const steps = list(o.step).map((s) => {
+				const [d, ...e] = String(s).split('|');
+				return { do: d.trim(), expect: e.join('|').trim() };
+			});
+			if (steps.length) {
+				body.steps = steps;
+				if (!o.kind) {
+					body.kind = 'steps';
+				}
+			}
+			const media = [];
+			for (const f of list(o.media)) {
+				const url = /^(https?:|\/media\/)/.test(f) ? f : (await api('POST', `/api/projects/${enc(slug)}/media?name=${enc(path.basename(f))}`, fs.readFileSync(f), { raw: true, headers: { 'Content-Type': 'application/octet-stream' } })).url;
+				media.push({ url, kind: /\.(mp4|webm|mov)$/i.test(f) ? 'video' : 'image', caption: '' });
+			}
+			if (media.length) {
+				body.media = media;
+				if (!o.kind) {
+					body.kind = 'look';
+				}
+			}
+			if (body.kind === 'look' && !media.length) {
+				die('a look needs --media <screenshot or video> (global rules: screenshots for visual A/B, videos for anything over time)');
+			}
+			const h = await api('POST', `/api/projects/${enc(slug)}/handoffs`, body);
+			console.log(`hand-off ${h.id} posted (${h.kind})`);
+			return;
+		}
+		case 'ask-json': {
+			const slug = await resolveProject(o);
+			const data = JSON.parse(fs.readFileSync(o._[0], 'utf8'));
+			const r = await api('POST', `/api/projects/${enc(slug)}/handoffs/import`, { handoffs: Array.isArray(data) ? data : [data] });
+			console.log(JSON.stringify(r));
+			return;
+		}
+		case 'handoffs': {
+			const slug = await resolveProject(o);
+			const q = typeof o.state === 'string' ? `?state=${enc(o.state)}` : '';
+			const hs = await api('GET', `/api/projects/${enc(slug)}/handoffs${q}`);
+			if (o.json) {
+				console.log(JSON.stringify(hs, null, 2));
+			} else {
+				hs.forEach(printHandoff);
+				console.log(`(${hs.length} hand-offs)`);
+			}
+			return;
+		}
+		case 'inbox': {
+			const slug = await resolveProject(o);
+			const inbox = await api('GET', `/api/projects/${enc(slug)}/inbox`);
+			const edited = await editedDocs(slug);
+			if (o.json) {
+				console.log(JSON.stringify({ handoffs: inbox, docs: edited }, null, 2));
+			} else {
+				inbox.forEach((h) => printHandoff({ ...h, state: 'answered' }));
+				console.log(`(${inbox.length} in the inbox)`);
+				printEditedDocs(edited);
+			}
+			return;
+		}
+		case 'docs':
+			await docsCommand(o);
+			return;
+		case 'doc':
+			await docCommand(o);
+			return;
+		case 'ack': {
+			const slug = await resolveProject(o);
+			for (const id of o._) {
+				await api('POST', `/api/projects/${enc(slug)}/handoffs/${enc(id)}/ack`, { note: typeof o.note === 'string' ? o.note : '', hide: !!o.hide });
+				console.log(`acknowledged ${id}`);
+			}
+			return;
+		}
+		case 'wait': {
+			const slug = await resolveProject(o);
+			const t = Number(o.timeout || 600);
+			const editedBefore = o.fresh ? [] : await editedDocs(slug);
+			if (editedBefore.length) {
+				printEditedDocs(editedBefore);
+				return;
+			}
+			const r = await api('GET', `/api/projects/${enc(slug)}/wait?timeout=${t}${o.fresh ? '&fresh=1' : ''}`);
+			console.log(r.timeout ? `no answers within ${t} s` : 'the user answered:');
+			r.inbox.forEach((h) => printHandoff({ ...h, state: 'answered' }));
+			printEditedDocs(await editedDocs(slug));
+			return;
+		}
+		case 'rules': {
+			const r = await api('GET', '/api/rules');
+			console.log(`Global rules (updated ${r.updated}):`);
+			r.rules.forEach((x, i) => console.log(`${i + 1}. ${x.text}\n`));
+			return;
+		}
+		case 'deps':
+			await deps(o);
+			return;
+		case 'needed': {
+			const slug = await resolveProject(o);
+			const tasks = (await api('GET', `/api/projects/${enc(slug)}/tasks`)).filter((t) => t.neededBy && (o.all || t.status !== 'done'))
+				.sort((x, y) => String(x.id).localeCompare(String(y.id), undefined, { numeric: true }));
+			if (o.json) {
+				console.log(JSON.stringify(tasks, null, 2));
+				return;
+			}
+			for (const t of tasks) {
+				console.log(`${pad(t.status, 6)} ${pad(t.id, 6)} ${pad(t.state, 24)} ${t.title}`);
+				for (const n of t.neededBy) {
+					console.log(`         needed by ${n.from}${n.until !== 'done' ? ` (until ${n.until})` : ''}${n.why ? `: ${n.why}` : ''}  [checked ${ago(n.lastCheck)}]`);
+				}
+			}
+			console.log(`(${tasks.length} ${o.all ? '' : 'open '}tasks other projects are waiting on${o.all ? '' : '; --all includes finished ones'})`);
+			return;
+		}
+		case 'format-request': {
+			if (typeof o.name !== 'string' || typeof o.description !== 'string') {
+				die('pb format-request --project <slug> --name <format> --description <text> [--sample-file <f>]');
+			}
+			const body = { project: typeof o.project === 'string' ? o.project : process.env.PB_PROJECT || path.basename(process.cwd()), name: o.name, description: o.description };
+			if (o['sample-file']) {
+				body.sample = fs.readFileSync(o['sample-file'], 'utf8');
+			}
+			const r = await api('POST', '/api/format-requests', body);
+			console.log(`format request filed as task ${r.task} on project ${r.project} (${BASE}${r.url})`);
+			return;
+		}
+		default:
+			die(`unknown command "${cmd}" (pb help)`);
+	}
+}
+
+main().catch((e) => die(e.stack || e.message));

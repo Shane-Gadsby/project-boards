@@ -147,3 +147,14 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Project Boards: a server's data and anything specific to one deployment
+/data/
+/logs/
+/local/
+/held-*/
+/dist/
+/.dist-deny
+/.project-boards.json
+/ecosystem.config.js
+/server-setup.sh
