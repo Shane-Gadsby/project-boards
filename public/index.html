@@ -31,7 +31,10 @@
 <main>
 	<section id="tab-handoffs" class="tabpane" hidden>
 		<div class="message-box">
-			<textarea id="message-text" rows="2" placeholder="Message Claude (it lands in this project's inbox)"></textarea>
+			<div class="message-compose">
+				<textarea id="message-text" rows="2" placeholder="Message Claude (it lands in this project's inbox). Paste or drop images here too."></textarea>
+				<div id="message-media" class="media message-media" hidden></div>
+			</div>
 			<button id="message-send" class="primary">Send to Claude</button>
 		</div>
 		<h2 class="section-title">Waiting for you <span class="count" id="count-waiting"></span></h2>

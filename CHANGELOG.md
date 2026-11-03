@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.10.0 (2026-11-03)
+
+- Images can be pasted or dropped into the **Send to Claude** box. They upload straight away, show as thumbnails that
+  can be removed, and go with the message. `pb inbox` lists them, and the new `pb download <url>` saves one.
+- Hand-off cards have a **Send** button (or Ctrl+Enter). Typed answers and notes stay drafts until sent, so leaving a
+  box no longer sends it or moves the card to Answered. A choice or step button still sends at once, with the note
+  typed so far. The page warns before closing with anything unsent.
+- Fixed: `pb inbox` did not print the text of a message.
+
 ## 1.9.1 (2026-11-01)
 
 - Fixed: checking for and installing updates failed behind a proxy. The server and `pb self-update` now use `curl`, which

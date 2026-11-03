@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const { execFileSync, spawn } = require('child_process');
 
 // Bump on every change: the server reads this line to publish the version (GET /api/pb), and pb upgrade compares it.
-const VERSION = '1.9.1';
+const VERSION = '1.10.0';
 
 // Where pb self-update looks: the latest published release, which has pb and pb.sha256 attached. Drafts and pre-releases
 // are not offered.
@@ -111,6 +111,7 @@ contains the current directory.
   pb ack <id> [--note <text>] [--hide]   mark an answer as acted on (do this once you have recorded/acted on it)
   pb wait [--timeout <seconds>]     block until the user answers something (prints the inbox); default 600
   pb upload <file>                  upload an image/video, prints the URL to use in --media / "media"
+  pb download <url> [--out <file>]  save a /media/... file (an image the user pasted into a message), prints its path
 
   pb format-request --project <slug> --name <format> --description <text> [--sample-file <f>]
                                     ask for a native importer for a format the board does not read yet (see /enrol)
@@ -885,8 +886,19 @@ function printHandoff(h) {
 	// In the inbox with nothing left in it: the user cleared the answer.
 	const withdrawn = h.state === 'answered' && h.kind !== 'message' && !ans.trim();
 	console.log(`[${withdrawn ? 'withdrawn' : h.state || ''}] ${h.id} (${h.kind}${h.lane ? `, ${h.lane}` : ''}): ${h.title || h.question}`);
+	if (h.kind === 'message' && h.question) {
+		console.log(`    message: ${String(h.question).replace(/\n/g, '\n             ')}`);
+	}
 	if (ans.trim()) {
 		console.log(`    answer: ${ans}`);
+	}
+	// What the user pasted into a message; media needs this machine's login, so fetch it with pb download.
+	if (h.kind === 'message') {
+		for (const m of h.media || []) {
+			if (m.url) {
+				console.log(`    ${m.kind || 'image'}: ${m.url}${m.caption ? ` (${m.caption})` : ''}  (pb download ${m.url})`);
+			}
+		}
 	}
 	if (withdrawn) {
 		console.log('    the user cleared their answer: stop acting on it, it is unanswered again (then pb ack)');
@@ -1227,6 +1239,25 @@ async function main() {
 			}
 			const r = await api('POST', `/api/projects/${enc(await resolveProject(o))}/media?name=${enc(path.basename(file))}`, fs.readFileSync(file), { raw: true, headers: { 'Content-Type': 'application/octet-stream' } });
 			console.log(r.url);
+			return;
+		}
+		case 'download': {
+			const u = o._[0];
+			const m = /^(?:https?:\/\/[^/]+)?(?:\/[^]*?)?(\/media\/[a-z0-9-]+\/[^/?#]+)$/i.exec(u || '');
+			if (!m) {
+				die('pb download /media/<project>/<file> [--out <file>]');
+			}
+			if (!BASE) {
+				die(`no server for this project: run pb use <url> here (writes ${MARKER_FILE}), or set PB_URL`);
+			}
+			const cred = credentials();
+			const res = await fetch(BASE + m[1], { headers: cred ? { Authorization: `Bearer ${cred.token}` } : {} });
+			if (!res.ok) {
+				die(`GET ${m[1]}: ${res.status}${res.status === 401 ? ' (pb login)' : ''}`, res.status === 401 ? 3 : 1);
+			}
+			const out = typeof o.out === 'string' ? o.out : path.join(os.tmpdir(), `pb-${path.basename(m[1])}`);
+			fs.writeFileSync(out, Buffer.from(await res.arrayBuffer()));
+			console.log(out);
 			return;
 		}
 		case 'ask': {

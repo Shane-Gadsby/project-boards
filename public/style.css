@@ -52,7 +52,7 @@ body.archived .card textarea, body.archived .card input, body.archived .card but
 .update-notes { background: #f7f8fa; border-radius: 6px; padding: 8px; font-size: 12.5px; max-height: 240px; overflow: auto; white-space: pre-wrap; }
 .danger-zone { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; display: grid; gap: 8px; }
 button.danger { color: #b3261e; border-color: #e3b5b2; }
-button.danger:disabled { opacity: .45; cursor: not-allowed; }
+button.danger:disabled, button.primary:disabled { opacity: .45; cursor: not-allowed; }
 .banner { background: var(--warn-soft); border-bottom: 1px solid #efd9ad; padding: 7px 16px; }
 
 main { padding: 16px; max-width: 1500px; margin: 0 auto; }
@@ -63,7 +63,14 @@ main { padding: 16px; max-width: 1500px; margin: 0 auto; }
 .hint { color: var(--muted); font-size: 12.5px; }
 
 .message-box { display: flex; gap: 8px; align-items: flex-start; }
-.message-box textarea { flex: 1; }
+.message-compose { flex: 1; min-width: 0; }
+.message-box textarea.dragging { border-color: var(--accent); background: var(--accent-soft); }
+.message-media { grid-template-columns: repeat(auto-fill, minmax(120px, 160px)); margin: 6px 0 0; }
+.message-media figure { position: relative; }
+.message-media figure.uploading img { opacity: .5; }
+.message-media .remove { position: absolute; top: 4px; right: 4px; padding: 0 7px; font-size: 13px; line-height: 20px; }
+.card .actions .send-reply { margin-left: auto; }
+.card .unsent { font-size: 12px; color: var(--warn); margin-top: 6px; }
 
 .lanes { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); align-items: start; }
 .lane { background: #eceef2; border-radius: var(--radius); padding: 10px; }

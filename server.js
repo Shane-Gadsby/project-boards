@@ -19,7 +19,7 @@ const { createUpdater } = require('./lib/updater');
 const { createDocs, RAW_TYPES, SANDBOX_CSP } = require('./lib/docs');
 const { deriveStatus, resolutionOf, firstWord, STATUSES } = require('./lib/status');
 
-const VERSION = '1.9.1';
+const VERSION = '1.10.0';
 const ROOT = __dirname;
 const PORT = Number(process.env.PB_PORT || 4780);
 const HOST = process.env.PB_HOST || '0.0.0.0';
@@ -1395,10 +1395,12 @@ async function route(req, res) {
 			if (b === 'message' && method === 'POST') {
 				userOnly(actor);
 				const body = await readBody(req);
-				if (!body.text) {
-					throw httpError(400, 'text required');
+				// Images pasted into the box come as media: uploaded first (POST media), so only this project's files.
+				const media = Array.isArray(body.media) ? body.media.filter((m) => m && typeof m.url === 'string' && m.url.startsWith(`/media/${slug}/`)) : [];
+				if (!body.text && !media.length) {
+					throw httpError(400, 'text or media required');
 				}
-				const rec = upsertHandoff(proj, { kind: 'message', title: 'Message from the user', question: String(body.text), lane: body.lane, visible: true }, 'user');
+				const rec = upsertHandoff(proj, { kind: 'message', title: 'Message from the user', question: String(body.text || ''), lane: body.lane, visible: true, ...(media.length ? { media } : {}) }, 'user');
 				return send(res, 201, rec);
 			}
 			// The page's "Tell waiting sessions": wake every pb wait now, with the whole inbox.

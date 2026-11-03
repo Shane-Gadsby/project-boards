@@ -16,7 +16,6 @@ const state = {
 	showAllDone: false,
 	openTask: null,
 	drafts: new Map(), // "<handoff id>:<field>" -> text being typed, kept across re-renders
-	clears: new Map(), // hand-off id -> times Clear answer was used on it, so a note still waiting to save cannot undo it
 	neededBy: {}, // task id -> [{from, why, until, lastCheck}]: other projects waiting on it
 	docs: new Map(), // id -> doc without content
 	doc: null, // the open doc: {id, version (null = latest), record (with content)}
@@ -574,7 +573,8 @@ function renderHandoffCard(h) {
 		for (const c of h.choices || []) {
 			const isDefault = h.default && c.label === h.default;
 			const b = el(`<button type="button" class="choice${isDefault ? ' default' : ''}${h.answer === c.label ? ' selected' : ''}">${esc(c.label)}${isDefault ? ' <span class="tag default">default</span>' : ''}${c.detail ? `<span class="detail">${esc(c.detail)}</span>` : ''}</button>`);
-			b.addEventListener('click', () => answer(h.id, { answer: h.answer === c.label ? null : c.label }));
+			// A click is a decision, so it sends now, with the note typed so far.
+			b.addEventListener('click', () => answer(h.id, { answer: h.answer === c.label ? null : c.label, ...draftBody(h.id, ['note']) }, [`${h.id}:note`]));
 			box.append(b);
 		}
 		n.append(box);
@@ -589,7 +589,7 @@ function renderHandoffCard(h) {
 			const li = el(`<li class="step"><div class="do">${i + 1}. ${esc(s.do)}</div>${s.expect ? `<div class="expect">Should happen: ${esc(s.expect)}</div>` : ''}<div class="step-buttons"></div></li>`);
 			for (const [st, label] of [['good', 'Looks good'], ['blocked', 'Blocked, see notes'], ['work', 'Needs work, see notes']]) {
 				const b = el(`<button type="button" class="${a.state === st ? `sel-${st}` : ''}">${label}</button>`);
-				b.addEventListener('click', () => answer(h.id, { step: i, state: a.state === st ? null : st }));
+				b.addEventListener('click', () => answer(h.id, { step: i, state: a.state === st ? null : st, ...draftBody(h.id, [`step:${i}`]) }, [`${h.id}:step:${i}`]));
 				$('.step-buttons', li).append(b);
 			}
 			li.append(noteBox(h, `step:${i}`, 'Notes for this step', a.note || ''));
@@ -601,33 +601,89 @@ function renderHandoffCard(h) {
 		$('button', row).addEventListener('click', () => api('PATCH', P(`/handoffs/${encodeURIComponent(h.id)}`), { visible: false }).catch(alert));
 		n.append(row);
 	}
-	if (['choice', 'look', 'text', 'steps'].includes(h.kind) && hasAnswer(h)) {
-		const row = el('<div class="actions"><button type="button">Clear answer</button></div>');
-		$('button', row).addEventListener('click', () => clearAnswer(h));
+	if (['choice', 'look', 'text', 'steps'].includes(h.kind)) {
+		// Typed text is a draft until Send (or Ctrl+Enter): leaving the box does not send it or move the card.
+		const row = el(`<div class="actions">${hasAnswer(h) ? '<button type="button" class="clear">Clear answer</button>' : ''}<button type="button" class="primary send-reply" title="Send what you typed to Claude (Ctrl+Enter)">Send</button></div>`);
+		$('.clear', row)?.addEventListener('click', () => clearAnswer(h));
+		$('.send-reply', row).addEventListener('click', () => sendDrafts(h.id));
 		n.append(row);
+		n.append(el('<div class="unsent" hidden>Not sent yet: Claude sees this once you press Send.</div>'));
 	}
 	n.insertAdjacentHTML('beforeend', statusLine(h));
+	updateUnsent(n, h.id);
 	return n;
 }
 
-// A note/answer textarea that saves as it is typed (debounced) and keeps its draft across re-renders.
+function draftKeys(id) {
+	return [...state.drafts.keys()].filter((k) => k.startsWith(`${id}:`));
+}
+
+// The unsent text for some of a hand-off's fields, as answer-call fields.
+function draftBody(id, fields) {
+	const body = {};
+	for (const f of fields) {
+		const key = `${id}:${f}`;
+		if (state.drafts.has(key)) {
+			body[f.startsWith('step:') ? 'note' : f] = state.drafts.get(key);
+		}
+	}
+	return body;
+}
+
+function updateUnsent(card, id) {
+	const dirty = draftKeys(id).length > 0;
+	const send = $('.send-reply', card);
+	if (send) {
+		send.disabled = !dirty;
+	}
+	const hint = $('.unsent', card);
+	if (hint) {
+		hint.hidden = !dirty;
+	}
+	card.classList.toggle('has-unsent', dirty);
+}
+
+// Send every unsent box of a hand-off: answer and note in one call, each step's notes in its own.
+async function sendDrafts(id) {
+	const keys = draftKeys(id);
+	if (!keys.length) {
+		return;
+	}
+	const fields = keys.map((k) => k.slice(id.length + 1));
+	const plain = fields.filter((f) => !f.startsWith('step:'));
+	if (plain.length && !(await answer(id, draftBody(id, plain), plain.map((f) => `${id}:${f}`)))) {
+		return;
+	}
+	for (const f of fields.filter((x) => x.startsWith('step:'))) {
+		if (!(await answer(id, { step: Number(f.slice(5)), ...draftBody(id, [f]) }, [`${id}:${f}`]))) {
+			return;
+		}
+	}
+}
+
+// A note/answer textarea. What is typed stays a draft (kept across re-renders) until the card's Send, Ctrl+Enter, or a
+// choice/step button sends it; typing it back to what was sent drops the draft.
 function noteBox(h, field, placeholder, current) {
 	const key = `${h.id}:${field}`;
-	const value = state.drafts.has(key) ? state.drafts.get(key) : current ?? (field === 'answer' ? h.answer : h.note) ?? '';
+	const saved = String(current ?? (field === 'answer' ? h.answer : h.note) ?? '');
 	const ta = el(`<textarea class="note" rows="${field === 'answer' ? 3 : 2}" placeholder="${esc(placeholder)}"></textarea>`);
-	ta.value = value;
-	const clears = state.clears.get(h.id);
-	const save = debounce(() => {
-		if (state.clears.get(h.id) !== clears) {
-			return; // the answer was cleared while this waited to save; do not bring it back
-		}
-		const text = ta.value;
-		const body = field.startsWith('step:') ? { step: Number(field.slice(5)), note: text } : { [field]: text };
-		answer(h.id, body).then(() => state.drafts.delete(key));
-	}, 700);
+	ta.value = state.drafts.has(key) ? state.drafts.get(key) : saved;
 	ta.addEventListener('input', () => {
-		state.drafts.set(key, ta.value);
-		save();
+		if (ta.value === saved) {
+			state.drafts.delete(key);
+		} else {
+			state.drafts.set(key, ta.value);
+		}
+		const card = ta.closest('.card');
+		if (card) {
+			updateUnsent(card, h.id);
+		}
+	});
+	ta.addEventListener('keydown', (e) => {
+		if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+			e.preventDefault();
+			sendDrafts(h.id);
+		}
 	});
 	return ta;
 }
@@ -636,7 +692,6 @@ function clearAnswer(h) {
 	if (!confirm('Clear your answer and notes on this hand-off? It goes back to Waiting, and Claude is told.')) {
 		return;
 	}
-	state.clears.set(h.id, (state.clears.get(h.id) || 0) + 1);
 	for (const key of [...state.drafts.keys()]) {
 		if (key.startsWith(`${h.id}:`)) {
 			state.drafts.delete(key);
@@ -645,12 +700,27 @@ function clearAnswer(h) {
 	answer(h.id, { clear: true });
 }
 
-async function answer(id, body) {
+// Send an answer; the drafts it carried are dropped once it is saved (and kept, to try again, if it is not).
+async function answer(id, body, sentDrafts = []) {
+	const sent = sentDrafts.map((k) => [k, state.drafts.get(k)]);
 	try {
 		await api('POST', P(`/handoffs/${encodeURIComponent(id)}/answer`), body);
 	} catch (e) {
-		alert(`Could not save: ${e.message}`);
+		alert(`Could not send: ${e.message}`);
+		return false;
 	}
+	for (const [k, v] of sent) {
+		if (state.drafts.get(k) === v) {
+			state.drafts.delete(k); // unless more was typed while it was sending
+		}
+	}
+	for (const card of $$('.card[data-key]')) {
+		if (card.dataset.key === id) {
+			updateUnsent(card, id);
+		}
+	}
+	scheduleRender('handoffs');
+	return true;
 }
 
 function renderTasks() {
@@ -1218,7 +1288,8 @@ $('#new-doc').addEventListener('click', () => {
 });
 $('#doc-filter').addEventListener('input', debounce(renderDocList, 150));
 window.addEventListener('beforeunload', (e) => {
-	if (state.docEdit && state.docEdit.dirty) {
+	// Also unsent hand-off text and an unsent message: neither is saved anywhere until it is sent.
+	if ((state.docEdit && state.docEdit.dirty) || state.drafts.size || $('#message-text').value.trim() || messageMedia.length) {
 		e.preventDefault();
 	}
 });
@@ -1492,16 +1563,113 @@ $('#add-task-form').addEventListener('submit', async (e) => {
 		alert(err.message);
 	}
 });
-$('#message-send').addEventListener('click', async () => {
+// Images pasted or dropped into the message box upload straight away (POST media) and go with the message as its media.
+// Each entry: {id, name, preview (object URL), url (once uploaded), promise}.
+const messageMedia = [];
+let messageMediaSeq = 0;
+
+function renderMessageMedia() {
+	const box = $('#message-media');
+	box.hidden = messageMedia.length === 0;
+	box.replaceChildren(...messageMedia.map((m) => {
+		const f = el(`<figure class="${m.url ? '' : 'uploading'}"><img src="${esc(m.preview)}" alt="${esc(m.name)}"><figcaption>${m.url ? esc(m.name) : 'Uploading…'}</figcaption><button type="button" class="remove" title="Remove this image" aria-label="Remove this image">&times;</button></figure>`);
+		$('.remove', f).addEventListener('click', () => {
+			const i = messageMedia.indexOf(m);
+			if (i >= 0) {
+				messageMedia.splice(i, 1);
+				URL.revokeObjectURL(m.preview);
+				renderMessageMedia();
+			}
+		});
+		return f;
+	}));
+}
+
+async function uploadMedia(file, name) {
+	const res = await fetch(`${BASE}${P(`/media?name=${encodeURIComponent(name)}`)}`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/octet-stream', 'X-PB-Actor': 'user' },
+		body: file,
+	});
+	const data = await res.json().catch(() => ({}));
+	if (!res.ok) {
+		throw new Error(data.error || `${res.status}`);
+	}
+	return data.url;
+}
+
+function addMessageImages(files) {
+	const images = [...files].filter((f) => f && f.type.startsWith('image/'));
+	for (const file of images) {
+		const ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace(/[^a-z0-9]/g, '');
+		// Pasted screenshots are all called "image.png"; give each its own name.
+		const name = file.name && file.name !== 'image.png' ? file.name : `pasted-${++messageMediaSeq}.${ext}`;
+		const m = { name, preview: URL.createObjectURL(file), url: null };
+		m.promise = uploadMedia(file, name).then((url) => {
+			m.url = url;
+			renderMessageMedia();
+		}, (err) => {
+			const i = messageMedia.indexOf(m);
+			if (i >= 0) {
+				messageMedia.splice(i, 1);
+			}
+			renderMessageMedia();
+			alert(`Could not upload ${name}: ${err.message}`);
+		});
+		messageMedia.push(m);
+	}
+	renderMessageMedia();
+	return images.length;
+}
+
+$('#message-text').addEventListener('paste', (e) => {
+	const files = [...(e.clipboardData?.items || [])].filter((i) => i.kind === 'file').map((i) => i.getAsFile());
+	if (addMessageImages(files)) {
+		// Text pasted along with an image (some apps put both on the clipboard) still goes in.
+		const text = e.clipboardData.getData('text/plain');
+		if (!text) {
+			e.preventDefault();
+		}
+	}
+});
+$('#message-text').addEventListener('dragover', (e) => {
+	if ([...(e.dataTransfer?.items || [])].some((i) => i.kind === 'file')) {
+		e.preventDefault();
+		e.currentTarget.classList.add('dragging');
+	}
+});
+$('#message-text').addEventListener('dragleave', (e) => e.currentTarget.classList.remove('dragging'));
+$('#message-text').addEventListener('drop', (e) => {
+	e.currentTarget.classList.remove('dragging');
+	if (e.dataTransfer?.files?.length) {
+		e.preventDefault();
+		addMessageImages(e.dataTransfer.files);
+	}
+});
+
+$('#message-send').addEventListener('click', async (e) => {
+	const button = e.currentTarget;
 	const ta = $('#message-text');
-	if (!ta.value.trim()) {
+	if (!ta.value.trim() && !messageMedia.length) {
 		return;
 	}
+	button.disabled = true;
 	try {
-		await api('POST', P('/message'), { text: ta.value.trim() });
+		await Promise.all(messageMedia.map((m) => m.promise));
+		const media = messageMedia.filter((m) => m.url).map((m) => ({ url: m.url, kind: 'image', caption: m.name }));
+		if (!ta.value.trim() && !media.length) {
+			return;
+		}
+		await api('POST', P('/message'), { text: ta.value.trim(), media });
 		ta.value = '';
+		for (const m of messageMedia.splice(0)) {
+			URL.revokeObjectURL(m.preview);
+		}
+		renderMessageMedia();
 	} catch (err) {
 		alert(err.message);
+	} finally {
+		button.disabled = false;
 	}
 });
 $('#drawer-close').addEventListener('click', closeDrawer);
