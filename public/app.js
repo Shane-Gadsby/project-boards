@@ -372,6 +372,15 @@ function hasAnswer(h) {
 	return said(h.answer) || said(h.note) || (h.replyMedia || []).length > 0 || Object.values(h.stepAnswers || {}).some((s) => s && (s.state || said(s.note)));
 }
 
+// Answered in full: a hands-on set (several questions in one hand-off) only once every step has an answer, so it is not
+// sent to Claude, or shown as answered, after the first one. Keep in step with isComplete() in server.js.
+function isComplete(h) {
+	if (h.kind === 'steps' && (h.steps || []).length) {
+		return h.steps.every((_, i) => h.stepAnswers && h.stepAnswers[i] && h.stepAnswers[i].state);
+	}
+	return hasAnswer(h);
+}
+
 function handoffState(h) {
 	if (h.kind === 'message') {
 		return h.ackedAt && h.ackedAt >= (h.userUpdatedAt || '') ? 'acted' : 'answered';
@@ -379,7 +388,7 @@ function handoffState(h) {
 	if (h.kind === 'info') {
 		return h.ackedAt ? 'acted' : 'pending';
 	}
-	if (!h.userUpdatedAt || !hasAnswer(h)) {
+	if (!h.userUpdatedAt || !isComplete(h)) {
 		return 'pending';
 	}
 	return h.ackedAt && h.ackedAt >= h.userUpdatedAt ? 'acted' : 'answered';
@@ -543,6 +552,13 @@ function statusLine(h) {
 	}
 	if (h.state === 'answered') {
 		return `<div class="status-line">Answered ${ago(h.userUpdatedAt)}; Claude has not picked it up yet (you can still change or clear it)</div>`;
+	}
+	if (h.kind === 'steps' && hasAnswer(h)) {
+		const steps = (h.steps || []).length;
+		const done = (h.steps || []).filter((_, i) => h.stepAnswers && h.stepAnswers[i] && h.stepAnswers[i].state).length;
+		// Claude acted on it before: a change after that reaches Claude at once (see inboxOf in server.js).
+		const told = h.ackedAt && h.userUpdatedAt > h.ackedAt;
+		return `<div class="status-line">${done} of ${steps} steps answered. ${told ? 'Claude is told about this change.' : 'This goes to Claude once every step has an answer.'}</div>`;
 	}
 	if (h.userUpdatedAt && (!h.ackedAt || h.userUpdatedAt > h.ackedAt)) {
 		return `<div class="status-line">You cleared your answer ${ago(h.userUpdatedAt)}; Claude has not seen that yet</div>`;

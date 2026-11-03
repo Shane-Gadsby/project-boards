@@ -19,7 +19,7 @@ const { createUpdater } = require('./lib/updater');
 const { createDocs, RAW_TYPES, SANDBOX_CSP } = require('./lib/docs');
 const { deriveStatus, resolutionOf, firstWord, STATUSES } = require('./lib/status');
 
-const VERSION = '1.12.0';
+const VERSION = '1.12.1';
 const ROOT = __dirname;
 const PORT = Number(process.env.PB_PORT || 4780);
 const HOST = process.env.PB_HOST || '0.0.0.0';
@@ -594,6 +594,15 @@ function hasAnswer(h) {
 	return said(h.answer) || said(h.note) || (h.replyMedia || []).length > 0 || Object.values(h.stepAnswers || {}).some((s) => s && (s.state || said(s.note)));
 }
 
+// Answered in full: a hands-on set (several questions in one hand-off) only once every step has an answer, so it is not
+// sent to Claude, or shown as answered, after the first one. Keep in step with isComplete() in public/app.js.
+function isComplete(h) {
+	if (h.kind === 'steps' && (h.steps || []).length) {
+		return h.steps.every((_, i) => h.stepAnswers && h.stepAnswers[i] && h.stepAnswers[i].state);
+	}
+	return hasAnswer(h);
+}
+
 // Media the page sends with a message or reply: only files uploaded to this project (POST media), as {url, kind, caption}.
 function ownMedia(proj, list) {
 	return (Array.isArray(list) ? list : [])
@@ -672,7 +681,7 @@ function answerHandoff(proj, id, body) {
 	// userUpdatedAt moves even when nothing is left: the session may be acting on the old answer, so a withdrawn answer
 	// stays in the inbox until it is acknowledged.
 	rec.userUpdatedAt = now();
-	if (hasAnswer(rec)) {
+	if (isComplete(rec)) {
 		rec.answeredAt = rec.userUpdatedAt;
 	} else {
 		delete rec.answeredAt;
@@ -707,7 +716,8 @@ function ackHandoff(proj, id, body) {
 function inboxOf(proj) {
 	const out = [];
 	for (const h of proj.handoffs.values()) {
-		if (h.userUpdatedAt && (!h.ackedAt || h.userUpdatedAt > h.ackedAt)) {
+		// A half-answered set waits for the rest, unless Claude had acted on it before: then the change is news.
+		if (h.userUpdatedAt && (!h.ackedAt || h.userUpdatedAt > h.ackedAt) && (isComplete(h) || h.ackedAt || !hasAnswer(h) || h.kind === 'message' || h.kind === 'info')) {
 			out.push(h);
 		}
 	}
@@ -721,7 +731,7 @@ function handoffState(h) {
 	if (h.kind === 'info') {
 		return h.ackedAt ? 'acted' : 'pending';
 	}
-	if (!h.userUpdatedAt || !hasAnswer(h)) {
+	if (!h.userUpdatedAt || !isComplete(h)) {
 		return 'pending';
 	}
 	if (h.ackedAt && h.ackedAt >= h.userUpdatedAt) {

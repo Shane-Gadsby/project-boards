@@ -102,6 +102,13 @@ check "hook after a tool call" sh -c "echo '{\"session_id\":\"t1\",\"hook_event_
 has "it passes the message on" "hook test"
 check "hook again" sh -c "echo '{\"session_id\":\"t1\",\"hook_event_name\":\"Stop\"}' | \"$PB\" hook > \"$WORK/hook2\""
 check "told only once" sh -c "[ ! -s \"$WORK/hook2\" ]"
+# A hands-on set reaches the inbox only once every step has an answer.
+check "ask a set" "$PB" ask --id set --title "Set" --question "Try" --step "one|ok" --step "two|ok"
+curl -fsS -X POST "$BASE/api/projects/demo/handoffs/set/answer" -H "$J" -H 'X-PB-Actor: user' -d '{"step":0,"state":"good"}' >/dev/null
+check "half a set" sh -c "\"$PB\" inbox > \"$WORK/inbox1\"; ! grep -q '] set ' \"$WORK/inbox1\""
+curl -fsS -X POST "$BASE/api/projects/demo/handoffs/set/answer" -H "$J" -H 'X-PB-Actor: user' -d '{"step":1,"state":"good"}' >/dev/null
+check "the whole set" "$PB" inbox
+has "is in the inbox" "] set "
 check "hook install" "$PB" hook install
 check "settings written" grep -q '" hook"' "$WORK/repo/.claude/settings.local.json"
 

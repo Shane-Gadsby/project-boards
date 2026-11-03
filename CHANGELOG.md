@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.12.1 (2026-11-04)
+
+- Fixed: a hands-on hand-off (several steps in one) counted as answered, and went to Claude, as soon as its first step
+  had an answer. It now stays under Waiting, showing how many steps are done, until every step has one. A change after
+  Claude has acted on it still reaches Claude at once.
+
 ## 1.12.0 (2026-11-03)
 
 - Sessions hear about your answers while they work. `pb hook install` adds Claude Code hooks to a project (`--user`:

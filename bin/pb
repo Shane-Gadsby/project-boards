@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const { execFileSync, spawn } = require('child_process');
 
 // Bump on every change: the server reads this line to publish the version (GET /api/pb), and pb upgrade compares it.
-const VERSION = '1.12.0';
+const VERSION = '1.12.1';
 
 // Where pb self-update looks: the latest published release, which has pb and pb.sha256 attached. Drafts and pre-releases
 // are not offered.
@@ -895,6 +895,14 @@ function handoffLines(h) {
 	}
 	if (ans.trim()) {
 		out.push(`    answer: ${ans}`);
+	}
+	if (h.kind === 'steps' && (h.steps || []).length) {
+		const done = h.steps.filter((_, i) => h.stepAnswers && h.stepAnswers[i] && h.stepAnswers[i].state).length;
+		if (done < h.steps.length) {
+			out.push(h.ackedAt
+				? `    only ${done} of ${h.steps.length} steps answered now: the user changed it after you acted on it; wait for the rest before acting again`
+				: `    ${done} of ${h.steps.length} steps answered so far: it reaches your inbox once all are`);
+		}
 	}
 	if (h.kind === 'message' && h.edited) {
 		out.push(`    (the user edited this message ${h.edited})`);
