@@ -1865,6 +1865,14 @@ function renderMessageMedia() {
 	renderAttachments($('#message-media'), messageMedia, renderMessageMedia);
 }
 acceptImages($('#message-text'), () => messageMedia, renderMessageMedia);
+$('#message-text').addEventListener('keydown', (e) => {
+	if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+		e.preventDefault();
+		if (!$('#message-send').disabled) {
+			$('#message-send').click();
+		}
+	}
+});
 
 $('#message-send').addEventListener('click', async (e) => {
 	const button = e.currentTarget;

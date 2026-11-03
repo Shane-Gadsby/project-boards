@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.11.1 (2026-11-03)
+
+- Ctrl+Enter (Cmd+Enter on a Mac) sends the **Send to Claude** box.
+
 ## 1.11.0 (2026-11-03)
 
 - Images can be pasted or dropped into a hand-off's note and answer boxes too. They wait with the unsent reply, go to
