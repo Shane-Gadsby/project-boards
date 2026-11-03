@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.13.0 (2026-11-04)
+
+- Clicking an image on a hand-off opens all of that hand-off's images (its own and the ones in your reply) one at a
+  time, with a counter and the caption. Previous and Next buttons, or the Left and Right arrow keys, move through them,
+  wrapping round at either end.
+- Scroll to zoom an enlarged image, towards the point under the mouse. Drag to move it while zoomed, and double-click to
+  put it back.
+
 ## 1.12.1 (2026-11-04)
 
 - Fixed: a hands-on hand-off (several steps in one) counted as answered, and went to Claude, as soon as its first step

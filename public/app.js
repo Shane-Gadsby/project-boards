@@ -1970,6 +1970,7 @@ function closeLightbox() {
 	const lb = $('#lightbox');
 	lb.hidden = true;
 	lb.replaceChildren();
+	gallery = null;
 }
 
 // One video (Enlarge) or all of a card's videos (Compare), large, each with its own controls, in a grid of up to two
@@ -2006,12 +2007,114 @@ function openVideos(list) {
 	$('.lb-close', bar).addEventListener('click', closeLightbox);
 }
 
+// The images of one hand-off (its own and the ones in your reply), shown large one at a time: Previous/Next buttons
+// and the arrow keys move through them, wrapping round at either end.
+let gallery = null; // { items: [{src, caption}], i }
+
+function imageCaption(img) {
+	const fig = img.closest('figure');
+	const input = fig && $('input.caption', fig);
+	const cap = fig && $('figcaption', fig);
+	return (input && input.value) || (cap && cap.textContent.trim()) || img.alt || '';
+}
+
+function showGalleryImage() {
+	const { items, i } = gallery;
+	const it = items[i];
+	const lb = $('#lightbox');
+	const many = items.length > 1;
+	lb.replaceChildren(el(`<div class="lb-gallery">${many ? '<button type="button" class="lb-nav lb-prev" title="Previous (Left arrow)" aria-label="Previous image">&#8249;</button>' : ''}<img src="${esc(it.src)}" alt="${esc(it.caption)}">${many ? '<button type="button" class="lb-nav lb-next" title="Next (Right arrow)" aria-label="Next image">&#8250;</button>' : ''}</div>`),
+		el(`<div class="lb-caption">${many ? `<span class="lb-count">${i + 1} / ${items.length}</span>` : ''}${esc(it.caption)}</div>`));
+	$('.lb-prev', lb)?.addEventListener('click', () => stepGallery(-1));
+	$('.lb-next', lb)?.addEventListener('click', () => stepGallery(1));
+	zoomable($('.lb-gallery img', lb));
+	lb.hidden = false;
+}
+
+// Scroll to zoom an enlarged image, about the point under the mouse; drag to move it while zoomed; double-click puts
+// it back. A click on an image at normal size still closes the view.
+function zoomable(img) {
+	const z = { s: 1, x: 0, y: 0 };
+	let drag = null;
+	let moved = false;
+	img.style.transformOrigin = '0 0';
+	img.draggable = false;
+	const apply = () => {
+		img.style.transform = z.s === 1 ? '' : `translate(${z.x}px, ${z.y}px) scale(${z.s})`;
+		img.style.cursor = z.s === 1 ? 'zoom-in' : drag ? 'grabbing' : 'grab';
+		img.classList.toggle('zoomed', z.s !== 1);
+	};
+	img.addEventListener('wheel', (e) => {
+		e.preventDefault();
+		// The point under the mouse, in the image's own (unscaled) box, stays put: t' = p - (p - t) * s' / s.
+		const box = img.getBoundingClientRect();
+		const px = e.clientX - (box.left - z.x);
+		const py = e.clientY - (box.top - z.y);
+		const s2 = Math.min(20, Math.max(1, z.s * Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0015))));
+		if (s2 === 1) {
+			Object.assign(z, { s: 1, x: 0, y: 0 });
+		} else {
+			z.x = px - (px - z.x) * (s2 / z.s);
+			z.y = py - (py - z.y) * (s2 / z.s);
+			z.s = s2;
+		}
+		apply();
+	}, { passive: false });
+	img.addEventListener('pointerdown', (e) => {
+		moved = false;
+		if (z.s !== 1) {
+			drag = { x: e.clientX - z.x, y: e.clientY - z.y };
+			img.setPointerCapture(e.pointerId);
+			apply();
+		}
+	});
+	img.addEventListener('pointermove', (e) => {
+		if (drag) {
+			moved = true;
+			z.x = e.clientX - drag.x;
+			z.y = e.clientY - drag.y;
+			apply();
+		}
+	});
+	img.addEventListener('pointerup', () => {
+		drag = null;
+		apply();
+	});
+	img.addEventListener('dblclick', () => {
+		Object.assign(z, { s: 1, x: 0, y: 0 });
+		apply();
+	});
+	// Zoomed: a click (or the end of a drag) must not close the view.
+	img.addEventListener('click', (e) => {
+		if (z.s !== 1 || moved) {
+			e.stopPropagation();
+		}
+	});
+	apply();
+}
+
+function stepGallery(d) {
+	if (!gallery || $('#lightbox').hidden) {
+		return;
+	}
+	gallery.i = (gallery.i + d + gallery.items.length) % gallery.items.length;
+	showGalleryImage();
+}
+
+document.addEventListener('keydown', (e) => {
+	if (gallery && !$('#lightbox').hidden && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+		e.preventDefault();
+		stepGallery(e.key === 'ArrowLeft' ? -1 : 1);
+	}
+});
+
 document.addEventListener('click', (e) => {
 	const img = e.target.closest('.media img');
-	if (img) {
-		const lb = $('#lightbox');
-		lb.replaceChildren(el(`<img src="${esc(img.src)}" alt="">`));
-		lb.hidden = false;
+	if (img && !img.closest('#lightbox')) {
+		const scope = img.closest('.card') || img.closest('.media');
+		const imgs = $$('.media img', scope);
+		gallery = { items: imgs.map((x) => ({ src: x.src, caption: imageCaption(x) })), i: Math.max(0, imgs.indexOf(img)) };
+		showGalleryImage();
 		return;
 	}
 	const button = e.target.closest('.media .enlarge, .media .compare');

@@ -173,6 +173,18 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; ma
 .lightbox { position: fixed; inset: 0; background: rgba(15, 18, 28, 0.95); z-index: 20; display: flex; align-items: center; justify-content: center; cursor: zoom-out; }
 .lightbox img { max-width: 95vw; max-height: 95vh; }
 .lightbox { flex-direction: column; gap: 10px; }
+.lb-gallery { display: flex; align-items: center; gap: 12px; max-width: 98vw; }
+.lb-gallery img { max-width: calc(95vw - 120px); max-height: calc(95vh - 40px); }
+.lb-nav { flex: none; width: 48px; height: 64px; font-size: 34px; line-height: 1; padding: 0; color: #fff; background: rgba(20, 24, 36, 0.8); border: 1px solid rgba(255, 255, 255, 0.35); border-radius: 8px; cursor: pointer; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); }
+.lb-nav:hover { background: rgba(60, 68, 90, 0.95); }
+.lightbox { overflow: hidden; }
+.lb-gallery img { touch-action: none; user-select: none; }
+.lb-gallery img.zoomed { position: relative; z-index: 1; }
+.lb-nav, .lb-caption { position: relative; z-index: 2; }
+.lb-caption { color: #e6e8ef; font-size: 13px; cursor: default; padding: 3px 10px; border-radius: 12px; background: rgba(20, 24, 36, 0.8); }
+.lb-caption:empty { display: none; }
+.lb-count { display: inline-block; margin-right: 10px; padding: 1px 8px; border-radius: 10px; background: rgba(255, 255, 255, 0.15); }
+@media (max-width: 600px) { .lb-nav { width: 36px; height: 52px; font-size: 26px; } .lb-gallery img { max-width: calc(95vw - 90px); } }
 .lb-videos { display: grid; gap: 12px; width: min(96vw, calc(var(--cols) * 160vh)); grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); cursor: default; }
 .lb-videos figure { margin: 0; }
 .lb-videos video { display: block; width: 100%; max-height: calc((100vh - 110px) / var(--rows) - 24px); background: #000; border-radius: 6px; }
