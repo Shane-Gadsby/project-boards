@@ -208,6 +208,7 @@ function connectEvents(reconnecting = false) {
 		const ev = JSON.parse(m.data);
 		if (ev.type === 'hello') {
 			state.waiters = ev.waiters || 0;
+			state.sessions = ev.sessions || 0;
 			renderNotify();
 			if (connected) {
 				resync().catch(() => {});
@@ -215,6 +216,9 @@ function connectEvents(reconnecting = false) {
 			connected = true;
 		} else if (ev.type === 'waiters') {
 			state.waiters = ev.count;
+			renderNotify();
+		} else if (ev.type === 'sessions') {
+			state.sessions = ev.count;
 			renderNotify();
 		} else if (ev.type === 'task') {
 			if (ev.action === 'delete') {
@@ -314,11 +318,15 @@ document.addEventListener('visibilitychange', () => {
 function renderNotify() {
 	const answered = [...state.handoffs.values()].filter((h) => handoffState(h) === 'answered').length;
 	$('#notify-bar').hidden = answered === 0;
-	const n = state.waiters || 0;
-	$('#notify-sessions').disabled = n === 0;
-	$('#notify-status').textContent = n === 0
-		? 'No session is waiting right now. Sessions see these the next time they check their inbox.'
-		: `${n} session${n === 1 ? ' is' : 's are'} waiting. They are told anyway a minute after your last answer.`;
+	// Waiting: blocked in pb wait. Working: running the pb hook, told at their next step.
+	const w = state.waiters || 0;
+	const s = state.sessions || 0;
+	const plural = (n, one, many) => `${n} session${n === 1 ? ` ${one}` : `s ${many}`}`;
+	const parts = [w ? plural(w, 'is', 'are') + ' waiting' : '', s ? plural(s, 'is', 'are') + ' working on this project' : ''].filter(Boolean);
+	$('#notify-sessions').disabled = w + s === 0;
+	$('#notify-status').textContent = parts.length
+		? `${parts.join(', ')}. They are told anyway a minute after your last answer.`
+		: 'No session is working on this project right now. Sessions see these the next time they check their inbox.';
 }
 
 const pending = new Set();
@@ -735,8 +743,9 @@ function replyDraft(id) {
 function replyChanged(id, list) {
 	const key = `${id}:replyMedia`;
 	const h = state.handoffs.get(id);
-	const sent = ((h && h.replyMedia) || []).map((m) => m.url).join('\n');
-	if (!list.some((m) => !m.url) && list.map((m) => m.url).join('\n') === sent) {
+	const sig = (l) => l.map((m) => `${m.url}|${m.name}`).join('\n');
+	const sent = sig(savedAttachments(h && h.replyMedia));
+	if (!list.some((m) => !m.url) && sig(list) === sent) {
 		state.drafts.delete(key);
 	} else {
 		state.drafts.set(key, list);
@@ -1501,7 +1510,9 @@ async function installUpdate() {
 		return;
 	}
 	const b = $('#updates-install');
+	// Nothing else to press while it runs: a check would redraw the dialog over the progress.
 	b.disabled = true;
+	$('#updates-check').disabled = true;
 	try {
 		const started = new Date().toISOString();
 		await api('POST', '/api/update', { version });
@@ -1542,6 +1553,7 @@ async function installUpdate() {
 		showUpdateProgress(undefined);
 	} finally {
 		b.disabled = false;
+		$('#updates-check').disabled = false;
 	}
 }
 
@@ -1818,20 +1830,46 @@ function addImages(list, files, onChange) {
 	return images.length;
 }
 
-// Thumbnails of `list` in `box`, each with a remove button.
+// Thumbnails of `list` in `box`, each with a label that can be renamed (it goes to Claude as the image's caption, e.g.
+// "Before" and "After") and a remove button.
 function renderAttachments(box, list, onChange) {
 	box.hidden = list.length === 0;
-	box.replaceChildren(...list.map((m) => {
-		const f = el(`<figure class="${m.url ? '' : 'uploading'}"><img src="${esc(m.preview)}" alt="${esc(m.name)}"><figcaption>${m.url ? esc(m.name) : 'Uploading…'}</figcaption><button type="button" class="remove" title="Remove this image" aria-label="Remove this image">&times;</button></figure>`);
+	// An upload finishing redraws the strip; keep the label being typed in focused, with its caret.
+	const active = box.contains(document.activeElement) && document.activeElement.matches('input.caption') ? document.activeElement : null;
+	const keep = active ? { i: Number(active.dataset.i), s: active.selectionStart, e: active.selectionEnd } : null;
+	box.replaceChildren(...list.map((m, i) => {
+		const f = el(`<figure class="${m.url ? '' : 'uploading'}"><img src="${esc(m.preview)}" alt="${esc(m.name)}"><figcaption><input class="caption" data-i="${i}" maxlength="200" title="Label for this image (Claude sees it)" aria-label="Label for this image"><span class="hint">${m.url ? '' : 'Uploading…'}</span></figcaption><button type="button" class="remove" title="Remove this image" aria-label="Remove this image">&times;</button></figure>`);
+		const input = $('input.caption', f);
+		input.value = m.name;
+		input.addEventListener('input', () => {
+			m.name = input.value;
+		});
+		input.addEventListener('change', () => {
+			m.name = input.value.trim() || m.name;
+			onChange(list);
+		});
+		input.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter') {
+				e.preventDefault();
+				input.blur();
+			}
+		});
 		$('.remove', f).addEventListener('click', () => {
-			const i = list.indexOf(m);
-			if (i >= 0) {
-				list.splice(i, 1);
+			const i2 = list.indexOf(m);
+			if (i2 >= 0) {
+				list.splice(i2, 1);
 				onChange(list);
 			}
 		});
 		return f;
 	}));
+	if (keep) {
+		const again = box.querySelector(`input.caption[data-i="${keep.i}"]`);
+		if (again) {
+			again.focus();
+			again.setSelectionRange(keep.s, keep.e);
+		}
+	}
 }
 
 // Paste and drop images into a textarea; getList() gives the list to add to.
@@ -2004,7 +2042,8 @@ $('#resync').addEventListener('click', async (e) => {
 });
 $('#notify-sessions').addEventListener('click', async () => {
 	const r = await api('POST', P('/notify'));
-	$('#notify-status').textContent = `Told ${r.woken} session${r.woken === 1 ? '' : 's'}.`;
+	const told = [r.woken ? `woke ${r.woken} waiting session${r.woken === 1 ? '' : 's'}` : '', r.sessions ? `${r.sessions} working session${r.sessions === 1 ? ' is' : 's are'} told at ${r.sessions === 1 ? 'its' : 'their'} next step` : ''].filter(Boolean);
+	$('#notify-status').textContent = told.length ? `Done: ${told.join('; ')}.` : 'No session is working on this project right now.';
 });
 
 init().catch((e) => {

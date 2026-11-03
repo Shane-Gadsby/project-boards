@@ -239,5 +239,10 @@ curl -s "$B/api/deps?from=demo-app&ref=engine/83&ref=engine/tag:demo-app"
 
 ## Waking sessions
 
-`POST {p}/notify` (a signed-in browser only) wakes every `pb wait` now with the whole inbox. Answers otherwise wake them
-60 seconds after the last one; messages wake them at once. Answers `{woken, inbox}`.
+`POST {p}/notify` (a signed-in browser only) wakes every `pb wait` now with the whole inbox, and lets the answers through
+to sessions running the pb hook. Answers otherwise wake them 60 seconds after the last one; messages wake them at once.
+Answers `{woken, sessions, inbox}`.
+
+`GET {p}/hook?session=<id>` is what `pb hook` calls: it marks the session as working on the project (the page counts
+sessions seen in the last 5 minutes) and answers `{released, inbox, sessions}`, where answers changed at or before
+`released` have been let through. The session keeps track of what it has already been told.

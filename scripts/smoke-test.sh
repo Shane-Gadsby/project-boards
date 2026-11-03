@@ -95,6 +95,16 @@ check "its folder is gone" sh -c "[ ! -e \"$WORK/data/projects/gone\" ]"
 same "updates need a signed-in browser" 401 "$(code "$BASE/api/update" -H 'X-PB-Actor: user')"
 same "and so does installing one" 401 "$(code -X POST "$BASE/api/update" -H "$J" -H 'X-PB-Actor: user' -d '{"version":"9.9.9"}')"
 
+# pb hook: a working session is told about a message, once; installing it writes the project's local settings.
+cd "$WORK/repo"
+curl -fsS -X POST "$BASE/api/projects/demo/message" -H "$J" -H 'X-PB-Actor: user' -d '{"text":"hook test"}' >/dev/null
+check "hook after a tool call" sh -c "echo '{\"session_id\":\"t1\",\"hook_event_name\":\"PostToolUse\"}' | \"$PB\" hook"
+has "it passes the message on" "hook test"
+check "hook again" sh -c "echo '{\"session_id\":\"t1\",\"hook_event_name\":\"Stop\"}' | \"$PB\" hook > \"$WORK/hook2\""
+check "told only once" sh -c "[ ! -s \"$WORK/hook2\" ]"
+check "hook install" "$PB" hook install
+check "settings written" grep -q '" hook"' "$WORK/repo/.claude/settings.local.json"
+
 # A sub-path, alongside the root.
 SUB=$((PORT + 2))
 PB_AUTH=off PB_HOST=127.0.0.1 PB_PORT=$SUB PB_DATA="$WORK/data2" PB_BASE_PATH=/projects node "$ROOT/server.js" >"$WORK/sub.log" 2>&1 &

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.12.0 (2026-11-03)
+
+- Sessions hear about your answers while they work. `pb hook install` adds Claude Code hooks to a project (`--user`:
+  every project) that run `pb hook` after tool calls and before the session stops. **Tell sessions now** (was "Tell
+  waiting sessions") reaches those sessions at their next step, and the page counts them. Before, it could only reach a
+  session blocked in `pb wait`, which working sessions never are, so it almost always said nobody was waiting.
+- Pasted images have labels you can rename ("Before", "After"). Claude sees them as the images' captions.
+- **Check again** is disabled while an update runs.
+
 ## 1.11.1 (2026-11-03)
 
 - Ctrl+Enter (Cmd+Enter on a Mac) sends the **Send to Claude** box.

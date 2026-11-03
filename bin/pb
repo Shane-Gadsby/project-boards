@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const { execFileSync, spawn } = require('child_process');
 
 // Bump on every change: the server reads this line to publish the version (GET /api/pb), and pb upgrade compares it.
-const VERSION = '1.11.1';
+const VERSION = '1.12.0';
 
 // Where pb self-update looks: the latest published release, which has pb and pb.sha256 attached. Drafts and pre-releases
 // are not offered.
@@ -110,6 +110,9 @@ contains the current directory.
   pb inbox [--json]                 what the user answered or said that you have not acknowledged
   pb ack <id> [--note <text>] [--hide]   mark an answer as acted on (do this once you have recorded/acted on it)
   pb wait [--timeout <seconds>]     block until the user answers something (prints the inbox); default 600
+  pb hook install [--user]          let Claude Code sessions hear about the user's answers while they work (adds
+                                    PostToolUse and Stop hooks to .claude/settings.local.json; --user: every project)
+  pb hook uninstall [--user]        take them out again
   pb upload <file>                  upload an image/video, prints the URL to use in --media / "media"
   pb download <url> [--out <file>]  save a /media/... file (an image the user pasted into a message), prints its path
 
@@ -879,33 +882,211 @@ async function deps(o) {
 	}
 }
 
-function printHandoff(h) {
+function handoffLines(h) {
+	const out = [];
 	const ans = h.kind === 'steps'
 		? Object.entries(h.stepAnswers || {}).filter(([, s]) => s.state || s.note).map(([i, s]) => `step ${Number(i) + 1}: ${s.state || '-'}${s.note ? ` (${s.note})` : ''}`).join('; ')
 		: `${h.answer ?? ''}${h.note ? ` | note: ${h.note}` : ''}`;
 	// In the inbox with nothing left in it: the user cleared the answer.
 	const withdrawn = h.state === 'answered' && h.kind !== 'message' && !ans.trim() && !(h.replyMedia || []).length;
-	console.log(`[${withdrawn ? 'withdrawn' : h.state || ''}] ${h.id} (${h.kind}${h.lane ? `, ${h.lane}` : ''}): ${h.title || h.question}`);
+	out.push(`[${withdrawn ? 'withdrawn' : h.state || ''}] ${h.id} (${h.kind}${h.lane ? `, ${h.lane}` : ''}): ${h.title || h.question}`);
 	if (h.kind === 'message' && h.question) {
-		console.log(`    message: ${String(h.question).replace(/\n/g, '\n             ')}`);
+		out.push(`    message: ${String(h.question).replace(/\n/g, '\n             ')}`);
 	}
 	if (ans.trim()) {
-		console.log(`    answer: ${ans}`);
+		out.push(`    answer: ${ans}`);
 	}
 	if (h.kind === 'message' && h.edited) {
-		console.log(`    (the user edited this message ${h.edited})`);
+		out.push(`    (the user edited this message ${h.edited})`);
 	}
 	// What the user pasted into a message or a reply; media needs this machine's login, so fetch it with pb download.
-	{
-		for (const m of h.kind === 'message' ? h.media || [] : h.replyMedia || []) {
-			if (m.url) {
-				console.log(`    ${m.kind || 'image'}: ${m.url}${m.caption ? ` (${m.caption})` : ''}  (pb download ${m.url})`);
-			}
+	for (const m of h.kind === 'message' ? h.media || [] : h.replyMedia || []) {
+		if (m.url) {
+			out.push(`    ${m.kind || 'image'}: ${m.url}${m.caption ? ` (${m.caption})` : ''}  (pb download ${m.url})`);
 		}
 	}
 	if (withdrawn) {
-		console.log('    the user cleared their answer: stop acting on it, it is unanswered again (then pb ack)');
+		out.push('    the user cleared their answer: stop acting on it, it is unanswered again (then pb ack)');
 	}
+	return out;
+}
+
+function printHandoff(h) {
+	handoffLines(h).forEach((l) => console.log(l));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// pb hook: run by Claude Code hooks, so a session hears about the user's answers while it works, not only when it next
+// reads the inbox. After a tool call (PostToolUse) it checks at most every HOOK_EVERY_MS and passes on answers the user
+// has let through (Tell sessions, or a minute of quiet); before the session stops (Stop) it checks every time and passes
+// on everything new, so the session acts on it instead of going idle. Each session is told each answer once. It never
+// fails the session: on any problem it says nothing.
+
+const HOOK_EVERY_MS = 15000;
+const HOOK_DIR = path.join(CONFIG_DIR, 'hook');
+
+function hookState(session) {
+	try {
+		return JSON.parse(fs.readFileSync(path.join(HOOK_DIR, `${session}.json`), 'utf8'));
+	} catch {
+		return { told: {} };
+	}
+}
+
+function saveHookState(session, st) {
+	try {
+		fs.mkdirSync(HOOK_DIR, { recursive: true, mode: 0o700 });
+		fs.writeFileSync(path.join(HOOK_DIR, `${session}.json`), JSON.stringify(st));
+		// Now and then, forget sessions not seen for two days.
+		if (Math.random() < 0.02) {
+			const old = Date.now() - 2 * 86400000;
+			for (const f of fs.readdirSync(HOOK_DIR)) {
+				const p = path.join(HOOK_DIR, f);
+				if (fs.statSync(p).mtimeMs < old) {
+					fs.rmSync(p, { force: true });
+				}
+			}
+		}
+	} catch {
+		// a read-only home: the session is told again next time, which is harmless
+	}
+}
+
+async function hookGet(p) {
+	const cred = credentials();
+	const get = (base) => fetch(base + p, { headers: cred ? { Authorization: `Bearer ${cred.token}` } : {}, signal: AbortSignal.timeout(4000), redirect: 'manual' })
+		.then((r) => (r.ok ? r.json() : null));
+	let r = await get(BASE).catch(() => null);
+	if (!r && fallback) {
+		r = await get(fallback).catch(() => null);
+	}
+	return r;
+}
+
+async function hookProject(st) {
+	if (process.env.PB_PROJECT) {
+		return process.env.PB_PROJECT;
+	}
+	if (marker && marker.project) {
+		return marker.project;
+	}
+	// The registered project whose folder holds this one, looked up once an hour per session.
+	const cwd = fs.realpathSync(process.cwd());
+	if (st.cwd === cwd && st.slugAt && Date.now() - st.slugAt < 3600000) {
+		return st.slug;
+	}
+	const list = await hookGet('/api/projects');
+	let best = null;
+	for (const p of Array.isArray(list) ? list : []) {
+		try {
+			const real = p.path && fs.realpathSync(p.path);
+			if (real && (cwd === real || cwd.startsWith(real + path.sep)) && (!best || real.length > best.len)) {
+				best = { slug: p.slug, len: real.length };
+			}
+		} catch {
+			// a project folder that is not on this machine
+		}
+	}
+	Object.assign(st, { cwd, slug: best ? best.slug : null, slugAt: Date.now() });
+	return st.slug;
+}
+
+async function hook() {
+	let input = {};
+	try {
+		input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
+	} catch {
+		// run by hand: no input
+	}
+	const event = input.hook_event_name || 'PostToolUse';
+	const session = String(input.session_id || 'manual').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 80) || 'manual';
+	const st = hookState(session);
+	st.told = st.told || {};
+	const stopping = event === 'Stop' || event === 'SubagentStop';
+	if (!stopping && st.checked && Date.now() - st.checked < HOOK_EVERY_MS) {
+		return;
+	}
+	st.checked = Date.now();
+	const slug = BASE ? await hookProject(st) : null;
+	if (!slug) {
+		saveHookState(session, st);
+		return;
+	}
+	const r = await hookGet(`/api/projects/${enc(slug)}/hook?session=${enc(session)}`);
+	if (!r || !Array.isArray(r.inbox)) {
+		saveHookState(session, st);
+		return;
+	}
+	const fresh = r.inbox.filter((h) => st.told[h.id] !== h.userUpdatedAt && (stopping || (r.released && h.userUpdatedAt <= r.released)));
+	for (const h of fresh) {
+		st.told[h.id] = h.userUpdatedAt;
+	}
+	// Forget what has left the inbox, so a later change to it is news again.
+	const open = new Set(r.inbox.map((h) => h.id));
+	for (const id of Object.keys(st.told)) {
+		if (!open.has(id)) {
+			delete st.told[id];
+		}
+	}
+	saveHookState(session, st);
+	if (!fresh.length) {
+		return;
+	}
+	const text = [
+		`Project Boards (project ${slug}): the user has answered or written on the board${stopping ? ' and you were about to stop' : ''}. ` +
+		'Read it now and act on it (questions and requests from the user come before carrying on), record it on the board, and pb ack <id> each once acted on:',
+		...fresh.flatMap((h) => handoffLines({ ...h, state: 'answered' })),
+	].join('\n');
+	if (stopping) {
+		console.log(JSON.stringify({ decision: 'block', reason: text }));
+	} else {
+		console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: text } }));
+	}
+}
+
+// pb hook install [--user] | uninstall [--user]: add the hook to this project's .claude/settings.local.json (this
+// machine only: it names this pb's path), or with --user to ~/.claude/settings.json for every project.
+function hookSettingsFile(o) {
+	if (o.user) {
+		return path.join(os.homedir(), '.claude', 'settings.json');
+	}
+	const root = marker ? path.dirname(marker.file) : process.cwd();
+	return path.join(root, '.claude', 'settings.local.json');
+}
+
+const isPbHook = (c) => /(^|[\/"' ])pb"?'? hook$/.test(String(c || '').trim());
+
+function hookInstall(o, remove) {
+	const file = hookSettingsFile(o);
+	let settings = {};
+	if (fs.existsSync(file)) {
+		try {
+			settings = JSON.parse(fs.readFileSync(file, 'utf8'));
+		} catch (e) {
+			die(`${file} is not valid JSON (${e.message}): fix it first`);
+		}
+	}
+	settings.hooks = settings.hooks || {};
+	const command = `"${SELF}" hook`;
+	for (const ev of ['PostToolUse', 'Stop']) {
+		const groups = (settings.hooks[ev] || [])
+			.map((g) => ({ ...g, hooks: (g.hooks || []).filter((x) => !isPbHook(x.command)) }))
+			.filter((g) => g.hooks.length);
+		if (!remove) {
+			groups.push({ ...(ev === 'PostToolUse' ? { matcher: '*' } : {}), hooks: [{ type: 'command', command, timeout: 10 }] });
+		}
+		if (groups.length) {
+			settings.hooks[ev] = groups;
+		} else {
+			delete settings.hooks[ev];
+		}
+	}
+	if (!Object.keys(settings.hooks).length) {
+		delete settings.hooks;
+	}
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	fs.writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`);
+	console.log(remove ? `removed the pb hook from ${file}` : `added the pb hook to ${file} (PostToolUse and Stop): sessions started from now on hear about the user's answers while they work`);
 }
 
 // Task files: "# <id>-<slug>[: title]" then "Key: value" header lines (State, Owner, Claimed, Needs, Branch, Results).
@@ -1352,6 +1533,14 @@ async function main() {
 			}
 			return;
 		}
+		case 'hook':
+			if (rest[0] === 'install' || rest[0] === 'uninstall') {
+				hookInstall(o, rest[0] === 'uninstall');
+				return;
+			}
+			// Run by the hook itself: never fail the session.
+			await hook().catch(() => {});
+			return;
 		case 'wait': {
 			const slug = await resolveProject(o);
 			const t = Number(o.timeout || 600);

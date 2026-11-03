@@ -19,7 +19,7 @@ const { createUpdater } = require('./lib/updater');
 const { createDocs, RAW_TYPES, SANDBOX_CSP } = require('./lib/docs');
 const { deriveStatus, resolutionOf, firstWord, STATUSES } = require('./lib/status');
 
-const VERSION = '1.11.1';
+const VERSION = '1.12.0';
 const ROOT = __dirname;
 const PORT = Number(process.env.PB_PORT || 4780);
 const HOST = process.env.PB_HOST || '0.0.0.0';
@@ -324,10 +324,65 @@ function waiterCount(slug) {
 	return set ? set.size : 0;
 }
 
+// Sessions that run the pb hook (Claude Code hooks: after tool calls, and before stopping) check in here while they
+// work. They are not blocked in pb wait, so they count separately: slug -> Map(session id -> last seen, ms).
+const SESSION_SEEN_MS = 5 * 60 * 1000;
+const hookSessions = new Map();
+// When the user last let their answers through (Tell sessions, or the quiet minute): slug -> ISO time.
+const releasedAt = new Map();
+
+function sessionCount(slug) {
+	const m = hookSessions.get(slug);
+	if (!m) {
+		return 0;
+	}
+	const cutoff = Date.now() - SESSION_SEEN_MS;
+	for (const [id, at] of m) {
+		if (at < cutoff) {
+			m.delete(id);
+		}
+	}
+	return m.size;
+}
+
+function seeSession(slug, id) {
+	const before = sessionCount(slug);
+	if (!hookSessions.has(slug)) {
+		hookSessions.set(slug, new Map());
+	}
+	hookSessions.get(slug).set(id, Date.now());
+	if (sessionCount(slug) !== before) {
+		broadcast(slug, { type: 'sessions', count: sessionCount(slug) });
+	}
+}
+
+// Sessions that stopped checking in drop off the page's count.
+const sessionCounts = new Map();
+setInterval(() => {
+	for (const slug of hookSessions.keys()) {
+		const n = sessionCount(slug);
+		if (sessionCounts.get(slug) !== n) {
+			sessionCounts.set(slug, n);
+			broadcast(slug, { type: 'sessions', count: n });
+		}
+	}
+}, 30000).unref();
+
+// Answers up to this time are let through to working sessions: everything once the user has been quiet for
+// ANSWER_QUIET_MS (so a server restart loses nothing), else up to the last Tell sessions.
+function releasedFor(proj) {
+	const latest = inboxOf(proj).reduce((t, h) => (h.userUpdatedAt > t ? h.userUpdatedAt : t), '');
+	if (latest && Date.now() - Date.parse(latest) >= ANSWER_QUIET_MS) {
+		return now();
+	}
+	return releasedAt.get(proj.meta.slug) || null;
+}
+
 function wakeWaiters(proj) {
 	const slug = proj.meta.slug;
 	clearTimeout(quietTimers.get(slug));
 	quietTimers.delete(slug);
+	releasedAt.set(slug, now());
 	const n = waiterCount(slug);
 	if (n === 0) {
 		return 0;
@@ -1442,10 +1497,20 @@ async function route(req, res) {
 				const rec = upsertHandoff(proj, { kind: 'message', title: 'Message from the user', question: String(body.text || ''), lane: body.lane, visible: true, ...(media.length ? { media } : {}) }, 'user');
 				return send(res, 201, rec);
 			}
-			// The page's "Tell waiting sessions": wake every pb wait now, with the whole inbox.
+			// The page's "Tell sessions": wake every pb wait now, with the whole inbox, and let the answers through to
+			// sessions with the pb hook at their next step.
 			if (b === 'notify' && method === 'POST') {
 				userOnly(actor);
-				return send(res, 200, { woken: wakeWaiters(proj), inbox: inboxOf(proj).length });
+				return send(res, 200, { woken: wakeWaiters(proj), sessions: sessionCount(slug), inbox: inboxOf(proj).length });
+			}
+			// pb hook: a working session checks in. It gets the inbox and the time up to which answers are let through;
+			// it keeps track itself of what it has already been told.
+			if (b === 'hook' && method === 'GET') {
+				const session = String(url.searchParams.get('session') || '').slice(0, 100);
+				if (session) {
+					seeSession(slug, session);
+				}
+				return send(res, 200, { released: releasedFor(proj), inbox: inboxOf(proj), sessions: sessionCount(slug) });
 			}
 			if (b === 'docs') {
 				return docsRoute(req, res, url, method, actor, who, proj, id, c);
@@ -1495,7 +1560,7 @@ async function route(req, res) {
 			}
 			if (b === 'events' && method === 'GET') {
 				res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
-				res.write(`data: ${JSON.stringify({ type: 'hello', seq: proj.seq, waiters: waiterCount(slug) })}\n\n`);
+				res.write(`data: ${JSON.stringify({ type: 'hello', seq: proj.seq, waiters: waiterCount(slug), sessions: sessionCount(slug) })}\n\n`);
 				const set = sseClients.get(slug) || new Set();
 				sseClients.set(slug, set);
 				set.add(res);
