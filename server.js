@@ -19,7 +19,7 @@ const { createUpdater } = require('./lib/updater');
 const { createDocs, RAW_TYPES, SANDBOX_CSP } = require('./lib/docs');
 const { deriveStatus, resolutionOf, firstWord, STATUSES } = require('./lib/status');
 
-const VERSION = '1.10.0';
+const VERSION = '1.11.0';
 const ROOT = __dirname;
 const PORT = Number(process.env.PB_PORT || 4780);
 const HOST = process.env.PB_HOST || '0.0.0.0';
@@ -486,7 +486,7 @@ function upsertHandoff(proj, body, actor) {
 			}
 		}
 		// Imports may carry the user's earlier answer and Claude's acknowledgement.
-		for (const k of ['answer', 'note', 'stepAnswers', 'answeredAt', 'userUpdatedAt', 'ackedAt', 'ackNote']) {
+		for (const k of ['answer', 'note', 'stepAnswers', 'replyMedia', 'answeredAt', 'userUpdatedAt', 'ackedAt', 'ackNote']) {
 			if (body[k] !== undefined && actor !== 'user') {
 				rec[k] = body[k];
 			}
@@ -514,7 +514,7 @@ function upsertHandoff(proj, body, actor) {
 			rec[k] = body[k];
 		}
 	}
-	for (const k of ['answer', 'note', 'stepAnswers', 'answeredAt', 'userUpdatedAt', 'ackedAt', 'ackNote', 'created']) {
+	for (const k of ['answer', 'note', 'stepAnswers', 'replyMedia', 'answeredAt', 'userUpdatedAt', 'ackedAt', 'ackNote', 'created']) {
 		if (body[k] !== undefined) {
 			rec[k] = body[k];
 		}
@@ -536,7 +536,15 @@ function upsertHandoff(proj, body, actor) {
 // Whether the user has said anything on this hand-off. Clearing the last of it makes it unanswered again.
 function hasAnswer(h) {
 	const said = (v) => String(v ?? '').trim() !== '';
-	return said(h.answer) || said(h.note) || Object.values(h.stepAnswers || {}).some((s) => s && (s.state || said(s.note)));
+	return said(h.answer) || said(h.note) || (h.replyMedia || []).length > 0 || Object.values(h.stepAnswers || {}).some((s) => s && (s.state || said(s.note)));
+}
+
+// Media the page sends with a message or reply: only files uploaded to this project (POST media), as {url, kind, caption}.
+function ownMedia(proj, list) {
+	return (Array.isArray(list) ? list : [])
+		.filter((m) => m && typeof m.url === 'string' && m.url.startsWith(`/media/${proj.meta.slug}/`))
+		.slice(0, 20)
+		.map((m) => ({ url: m.url, kind: m.kind === 'video' ? 'video' : 'image', caption: String(m.caption || '').slice(0, 200) }));
 }
 
 // The user answers from the page: a choice/text answer and note, one step of a hands-on set, or `clear` for all of it.
@@ -546,10 +554,28 @@ function answerHandoff(proj, id, body) {
 		throw httpError(404, `no hand-off ${id}`);
 	}
 	const rec = { ...existing };
-	if (body.clear) {
+	// Messages: the user may change what they sent until Claude has read it.
+	if (rec.kind === 'message') {
+		if (rec.ackedAt && rec.ackedAt >= (rec.userUpdatedAt || '')) {
+			throw httpError(409, 'Claude has already read this message, so it can no longer be changed: send a new one');
+		}
+		const text = body.text !== undefined ? String(body.text) : rec.question;
+		const media = body.media !== undefined ? ownMedia(proj, body.media) : rec.media || [];
+		if (!text.trim() && !media.length) {
+			throw httpError(400, 'text or media required');
+		}
+		rec.question = text;
+		if (media.length) {
+			rec.media = media;
+		} else {
+			delete rec.media;
+		}
+		rec.edited = now();
+	} else if (body.clear) {
 		delete rec.answer;
 		delete rec.note;
 		delete rec.stepAnswers;
+		delete rec.replyMedia;
 	} else if (body.step !== undefined) {
 		const idx = Number(body.step);
 		if (!Number.isInteger(idx) || idx < 0 || idx >= (rec.steps || []).length) {
@@ -577,6 +603,15 @@ function answerHandoff(proj, id, body) {
 		}
 		if (body.note !== undefined) {
 			rec.note = String(body.note);
+		}
+	}
+	// Images the user pasted into a reply, kept with the hand-off as a whole (also when sent with a step's notes).
+	if (rec.kind !== 'message' && !body.clear && body.replyMedia !== undefined) {
+		const media = ownMedia(proj, body.replyMedia);
+		if (media.length) {
+			rec.replyMedia = media;
+		} else {
+			delete rec.replyMedia;
 		}
 	}
 	// userUpdatedAt moves even when nothing is left: the session may be acting on the old answer, so a withdrawn answer
@@ -1378,6 +1413,10 @@ async function route(req, res) {
 						if (!h) {
 							throw httpError(404, `no hand-off ${id}`);
 						}
+						// The page deletes a message only while Claude has not read it.
+						if (url.searchParams.get('ifUnread') === '1' && h.ackedAt && h.ackedAt >= (h.userUpdatedAt || '')) {
+							throw httpError(409, 'Claude has already read this message, so it can no longer be deleted');
+						}
 						proj.handoffs.delete(id);
 						deleteRecordFile(proj, 'handoffs', id);
 						logEvent(proj, { type: 'handoff', action: 'delete', actor, id });
@@ -1396,7 +1435,7 @@ async function route(req, res) {
 				userOnly(actor);
 				const body = await readBody(req);
 				// Images pasted into the box come as media: uploaded first (POST media), so only this project's files.
-				const media = Array.isArray(body.media) ? body.media.filter((m) => m && typeof m.url === 'string' && m.url.startsWith(`/media/${slug}/`)) : [];
+				const media = ownMedia(proj, body.media);
 				if (!body.text && !media.length) {
 					throw httpError(400, 'text or media required');
 				}

@@ -39,8 +39,6 @@ code { background: #eef0f4; padding: 1px 5px; border-radius: 4px; font-size: 12.
 .badge.muted { background: #e4e7ec; color: var(--muted); }
 .spacer { flex: 1; }
 .agents { font-size: 12.5px; color: var(--muted); }
-.conn { width: 9px; height: 9px; border-radius: 50%; background: #c3c8d1; }
-.conn.live { background: var(--good); }
 #resync.spin { animation: resync-spin .6s linear infinite; }
 @keyframes resync-spin { to { transform: rotate(360deg); } }
 .notify-bar { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; }
@@ -64,7 +62,10 @@ main { padding: 16px; max-width: 1500px; margin: 0 auto; }
 
 .message-box { display: flex; gap: 8px; align-items: flex-start; }
 .message-compose { flex: 1; min-width: 0; }
-.message-box textarea.dragging { border-color: var(--accent); background: var(--accent-soft); }
+.update-progress { margin: 8px 0 12px; }
+.update-progress progress { width: 100%; height: 14px; accent-color: var(--accent); }
+.update-progress .hint { display: block; margin-top: 4px; font-size: 12px; }
+.message-box textarea.dragging, .card textarea.dragging { border-color: var(--accent); background: var(--accent-soft); }
 .message-media { grid-template-columns: repeat(auto-fill, minmax(120px, 160px)); margin: 6px 0 0; }
 .message-media figure { position: relative; }
 .message-media figure.uploading img { opacity: .5; }

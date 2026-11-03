@@ -196,10 +196,7 @@ function connectEvents(reconnecting = false) {
 	lastHeard = Date.now();
 	const es = new EventSource(BASE + P('/events'));
 	state.es = es;
-	const conn = $('#conn');
-	es.onopen = () => conn.classList.add('live');
 	es.onerror = () => {
-		conn.classList.remove('live');
 		// The browser retries a dropped stream itself, but gives up for good on an error answer, like the proxy's 503
 		// during a restart.
 		if (es === state.es && es.readyState === EventSource.CLOSED) {
@@ -284,7 +281,6 @@ function reconnectEvents() {
 		state.es.close();
 		state.es = null;
 	}
-	$('#conn').classList.remove('live');
 	clearTimeout(retryTimer);
 	retryTimer = setTimeout(async () => {
 		try {
@@ -365,7 +361,7 @@ function scheduleRender(what) {
 // Keep in step with hasAnswer() in server.js.
 function hasAnswer(h) {
 	const said = (v) => String(v ?? '').trim() !== '';
-	return said(h.answer) || said(h.note) || Object.values(h.stepAnswers || {}).some((s) => s && (s.state || said(s.note)));
+	return said(h.answer) || said(h.note) || (h.replyMedia || []).length > 0 || Object.values(h.stepAnswers || {}).some((s) => s && (s.state || said(s.note)));
 }
 
 function handoffState(h) {
@@ -476,6 +472,13 @@ function renderHandoffs() {
 		return;
 	}
 	const all = [...state.handoffs.values()].map((h) => ({ ...h, state: handoffState(h) }));
+	// An edit of a message that Claude has read (or that is gone) meanwhile can no longer be saved.
+	for (const key of [...state.drafts.keys()].filter((k) => k.endsWith(':edit'))) {
+		const h = state.handoffs.get(key.slice(0, -5));
+		if (!h || handoffState(h) !== 'answered') {
+			state.drafts.delete(key);
+		}
+	}
 	const visible = all.filter((h) => h.visible !== false);
 	const byOrder = (a, b) => (a.order || 0) - (b.order || 0) || idCompare(a.id, b.id);
 	const waiting = visible.filter((h) => h.state === 'pending').sort(byOrder);
@@ -524,7 +527,8 @@ function renderHandoffs() {
 
 function statusLine(h) {
 	if (h.kind === 'message') {
-		return h.state === 'acted' ? `<div class="status-line ok">Claude has read this ${ago(h.ackedAt)}${h.ackNote ? `: ${esc(h.ackNote)}` : ''}</div>` : `<div class="status-line">Sent ${ago(h.userUpdatedAt)}; Claude has not read it yet</div>`;
+		const edited = h.edited ? ` (edited ${ago(h.edited)})` : '';
+		return h.state === 'acted' ? `<div class="status-line ok">Claude has read this ${ago(h.ackedAt)}${edited}${h.ackNote ? `: ${esc(h.ackNote)}` : ''}</div>` : `<div class="status-line">Sent ${ago(h.created || h.userUpdatedAt)}${edited}; Claude has not read it yet, so you can still edit or delete it</div>`;
 	}
 	if (h.state === 'acted') {
 		return `<div class="status-line ok">Claude picked this up ${ago(h.ackedAt)}${h.ackNote ? `: ${esc(h.ackNote)}` : ''}</div><div class="status-line">Changing or clearing this tells Claude again.</div>`;
@@ -574,14 +578,17 @@ function renderHandoffCard(h) {
 			const isDefault = h.default && c.label === h.default;
 			const b = el(`<button type="button" class="choice${isDefault ? ' default' : ''}${h.answer === c.label ? ' selected' : ''}">${esc(c.label)}${isDefault ? ' <span class="tag default">default</span>' : ''}${c.detail ? `<span class="detail">${esc(c.detail)}</span>` : ''}</button>`);
 			// A click is a decision, so it sends now, with the note typed so far.
-			b.addEventListener('click', () => answer(h.id, { answer: h.answer === c.label ? null : c.label, ...draftBody(h.id, ['note']) }, [`${h.id}:note`]));
+			b.addEventListener('click', async () => {
+				await attachmentsToMedia(state.drafts.get(`${h.id}:replyMedia`) || []);
+				answer(h.id, { answer: h.answer === c.label ? null : c.label, ...draftBody(h.id, ['note', 'replyMedia']) }, [`${h.id}:note`, `${h.id}:replyMedia`]);
+			});
 			box.append(b);
 		}
 		n.append(box);
-		n.append(noteBox(h, 'note', 'Note (optional)'));
+		n.append(noteBox(h, 'note', 'Note (optional; paste or drop images here too)'));
 	} else if (h.kind === 'text') {
 		n.append(noteBox(h, 'answer', 'Your answer'));
-		n.append(noteBox(h, 'note', 'Note (optional)'));
+		n.append(noteBox(h, 'note', 'Note (optional; paste or drop images here too)'));
 	} else if (h.kind === 'steps') {
 		const ol = el('<ol class="steps"></ol>');
 		(h.steps || []).forEach((s, i) => {
@@ -602,6 +609,13 @@ function renderHandoffCard(h) {
 		n.append(row);
 	}
 	if (['choice', 'look', 'text', 'steps'].includes(h.kind)) {
+		// Images pasted or dropped into any of the card's boxes: sent with the reply, shown (and removable) here.
+		const strip = el(`<div class="media message-media reply-media" data-h="${esc(h.id)}" hidden></div>`);
+		n.append(strip);
+		for (const ta of $$('textarea.note', n)) {
+			acceptImages(ta, () => replyDraft(h.id), (list) => replyChanged(h.id, list));
+		}
+		renderAttachments(strip, replyList(h.id), (list) => replyChanged(h.id, list));
 		// Typed text is a draft until Send (or Ctrl+Enter): leaving the box does not send it or move the card.
 		const row = el(`<div class="actions">${hasAnswer(h) ? '<button type="button" class="clear">Clear answer</button>' : ''}<button type="button" class="primary send-reply" title="Send what you typed to Claude (Ctrl+Enter)">Send</button></div>`);
 		$('.clear', row)?.addEventListener('click', () => clearAnswer(h));
@@ -609,9 +623,133 @@ function renderHandoffCard(h) {
 		n.append(row);
 		n.append(el('<div class="unsent" hidden>Not sent yet: Claude sees this once you press Send.</div>'));
 	}
+	if (h.kind === 'message' && h.state === 'answered') {
+		messageEditing(n, h);
+	}
 	n.insertAdjacentHTML('beforeend', statusLine(h));
 	updateUnsent(n, h.id);
 	return n;
+}
+
+// A message Claude has not read yet can be changed or deleted. While editing, the draft {text, media} lives in
+// state.drafts under "<id>:edit", so a re-render (or Claude reading it meanwhile) does not lose it.
+function messageEditing(n, h) {
+	const key = `${h.id}:edit`;
+	const draft = state.drafts.get(key);
+	if (!draft) {
+		const row = el('<div class="actions"><button type="button" class="delete-message">Delete</button><button type="button" class="edit-message">Edit</button></div>');
+		$('.edit-message', row).addEventListener('click', () => {
+			state.drafts.set(key, { text: h.question || '', media: savedAttachments(h.media) });
+			scheduleRender('handoffs');
+			rerenderCard(h.id);
+		});
+		$('.delete-message', row).addEventListener('click', async () => {
+			if (!confirm('Delete this message? Claude has not read it yet, so it will never see it.')) {
+				return;
+			}
+			try {
+				await api('DELETE', P(`/handoffs/${encodeURIComponent(h.id)}?ifUnread=1`));
+			} catch (e) {
+				alert(`Could not delete: ${e.message}`);
+			}
+		});
+		n.append(row);
+		return;
+	}
+	// Hide what was sent; the editor stands in for it.
+	for (const x of $$(':scope > .question, :scope > .media', n)) {
+		x.hidden = true;
+	}
+	const ta = el('<textarea class="note" rows="3" placeholder="Message (paste or drop images here too)"></textarea>');
+	ta.value = draft.text;
+	ta.addEventListener('input', () => {
+		draft.text = ta.value;
+	});
+	const strip = el('<div class="media message-media" hidden></div>');
+	const redraw = () => renderAttachments(strip, draft.media, redraw);
+	acceptImages(ta, () => draft.media, redraw);
+	redraw();
+	const row = el('<div class="actions"><button type="button" class="cancel">Cancel</button><button type="button" class="primary save" title="Ctrl+Enter">Save</button></div>');
+	const save = async () => {
+		$('.save', row).disabled = true;
+		try {
+			const media = await attachmentsToMedia(draft.media);
+			if (!draft.text.trim() && !media.length) {
+				alert('A message needs some text or an image. To take it back, use Delete.');
+				return;
+			}
+			await api('POST', P(`/handoffs/${encodeURIComponent(h.id)}/answer`), { text: draft.text.trim(), media });
+			state.drafts.delete(key);
+			scheduleRender('handoffs');
+		} catch (e) {
+			alert(`Could not save: ${e.message}`);
+			if (/already read/.test(e.message)) {
+				state.drafts.delete(key);
+				scheduleRender('handoffs');
+			}
+		} finally {
+			$('.save', row).disabled = false;
+		}
+	};
+	$('.save', row).addEventListener('click', save);
+	ta.addEventListener('keydown', (e) => {
+		if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+			e.preventDefault();
+			save();
+		}
+	});
+	$('.cancel', row).addEventListener('click', () => {
+		state.drafts.delete(key);
+		rerenderCard(h.id);
+	});
+	n.append(ta, strip, row);
+	setTimeout(() => {
+		if (n.isConnected && !n.contains(document.activeElement)) {
+			ta.focus();
+		}
+	});
+}
+
+// Draw one hand-off card again now (its version did not change, so renderKeyed would keep it).
+function rerenderCard(id) {
+	for (const card of $$('.card[data-key]')) {
+		if (card.dataset.key === id) {
+			card.dataset.ver = '';
+		}
+	}
+	scheduleRender('handoffs');
+}
+
+// A hand-off's reply images: the draft list while it differs from what was sent, else (a copy of) the sent ones.
+function replyList(id) {
+	return state.drafts.get(`${id}:replyMedia`) || savedAttachments((state.handoffs.get(id) || {}).replyMedia);
+}
+function replyDraft(id) {
+	const key = `${id}:replyMedia`;
+	if (!state.drafts.has(key)) {
+		state.drafts.set(key, replyList(id));
+	}
+	return state.drafts.get(key);
+}
+// `list` changed (image added, uploaded, failed or removed): keep it as the draft unless it is back to what was sent.
+function replyChanged(id, list) {
+	const key = `${id}:replyMedia`;
+	const h = state.handoffs.get(id);
+	const sent = ((h && h.replyMedia) || []).map((m) => m.url).join('\n');
+	if (!list.some((m) => !m.url) && list.map((m) => m.url).join('\n') === sent) {
+		state.drafts.delete(key);
+	} else {
+		state.drafts.set(key, list);
+	}
+	for (const strip of $$('.reply-media')) {
+		if (strip.dataset.h === id) {
+			renderAttachments(strip, replyList(id), (l) => replyChanged(id, l));
+			const card = strip.closest('.card');
+			if (card) {
+				updateUnsent(card, id);
+			}
+		}
+	}
 }
 
 function draftKeys(id) {
@@ -624,7 +762,12 @@ function draftBody(id, fields) {
 	for (const f of fields) {
 		const key = `${id}:${f}`;
 		if (state.drafts.has(key)) {
-			body[f.startsWith('step:') ? 'note' : f] = state.drafts.get(key);
+			const v = state.drafts.get(key);
+			if (f === 'replyMedia') {
+				body.replyMedia = v.filter((m) => m.url).map((m) => ({ url: m.url, kind: m.kind || 'image', caption: m.name }));
+			} else {
+				body[f.startsWith('step:') ? 'note' : f] = v;
+			}
 		}
 	}
 	return body;
@@ -645,7 +788,8 @@ function updateUnsent(card, id) {
 
 // Send every unsent box of a hand-off: answer and note in one call, each step's notes in its own.
 async function sendDrafts(id) {
-	const keys = draftKeys(id);
+	await attachmentsToMedia(state.drafts.get(`${id}:replyMedia`) || []);
+	const keys = draftKeys(id).filter((k) => !k.endsWith(':edit'));
 	if (!keys.length) {
 		return;
 	}
@@ -1314,6 +1458,43 @@ async function checkUpdates(force) {
 	detail.textContent = failed ? `The last try failed${u.status.error ? `: ${u.status.error}` : '; see the server log'}.` : 'This server is not set up to update from the page. Rerun its install command.';
 }
 
+// The progress bar: pct null shows it moving without a value (a step whose length is not known).
+function showUpdateProgress(pct, text) {
+	const box = $('#updates-progress');
+	box.hidden = pct === undefined;
+	const bar = $('progress', box);
+	if (pct === null || pct === undefined) {
+		bar.removeAttribute('value');
+	} else {
+		bar.value = Math.max(0, Math.min(100, pct));
+	}
+	$('.hint', box).textContent = text || '';
+}
+
+const MB = (n) => (n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+// Where an update is, as [percent or null, words]: download is most of the bar, then the short steps, then the restart.
+function updateStage(u, version) {
+	const p = u && u.progress && u.progress.version === version ? u.progress : null;
+	if (!p) {
+		// The systemd installer only says it is running.
+		return u && u.status && u.status.state === 'running' && u.status.version === version ? [null, 'Installing...'] : [2, 'Starting...'];
+	}
+	switch (p.step) {
+		case 'downloading':
+			return p.total ? [5 + (75 * p.done) / p.total, `Downloading ${MB(p.done)} of ${MB(p.total)}`] : [null, `Downloading ${MB(p.done || 0)}`];
+		case 'verifying':
+			return [82, 'Checking the download'];
+		case 'unpacking':
+			return [86, 'Unpacking'];
+		case 'installing':
+			return [90, 'Installing the new files'];
+		case 'restarting':
+			return [95, 'Restarting the server'];
+		default:
+			return [3, 'Starting...'];
+	}
+}
+
 async function installUpdate() {
 	const version = updateInfo.latest;
 	if (!confirm(`Update this server to ${version}? It will restart, and open pages reconnect by themselves.`)) {
@@ -1325,24 +1506,40 @@ async function installUpdate() {
 		const started = new Date().toISOString();
 		await api('POST', '/api/update', { version });
 		$('#updates-summary').textContent = `Updating to ${version}...`;
-		const deadline = Date.now() + 180000;
+		$('#updates-notes').hidden = true;
+		showUpdateProgress(2, 'Starting...');
+		const deadline = Date.now() + 600000;
+		let gone = false; // the old server has stopped answering: it is restarting
 		while (Date.now() < deadline) {
-			await new Promise((r) => setTimeout(r, 3000));
+			await new Promise((r) => setTimeout(r, 1000));
 			const h = await fetch(`${BASE}/api/health`).then((r) => r.json()).catch(() => null);
 			if (h && h.version === version) {
+				showUpdateProgress(100, `Updated to ${version}. Reloading...`);
+				await new Promise((r) => setTimeout(r, 600));
 				location.reload();
 				return;
 			}
-			const now = h && (await api('GET', '/api/update').catch(() => null));
+			if (!h) {
+				gone = true;
+				showUpdateProgress(97, 'Restarting the server');
+				continue;
+			}
+			const now = await api('GET', '/api/update').catch(() => null);
+			if (!gone) {
+				showUpdateProgress(...updateStage(now, version));
+			}
 			if (now && now.status && now.status.state === 'failed' && now.status.version === version && now.status.at > started) {
 				await checkUpdates(false);
 				$('#updates-summary').textContent = `The update to ${version} failed. This server is still on ${now.current}.`;
+				showUpdateProgress(undefined);
 				return;
 			}
 		}
 		$('#updates-summary').textContent = 'The update has not finished. Check the server log.';
+		showUpdateProgress(undefined);
 	} catch (e) {
 		$('#updates-summary').textContent = `Could not update: ${e.message}`;
+		showUpdateProgress(undefined);
 	} finally {
 		b.disabled = false;
 	}
@@ -1563,27 +1760,10 @@ $('#add-task-form').addEventListener('submit', async (e) => {
 		alert(err.message);
 	}
 });
-// Images pasted or dropped into the message box upload straight away (POST media) and go with the message as its media.
-// Each entry: {id, name, preview (object URL), url (once uploaded), promise}.
+// Images pasted or dropped into a box upload straight away (POST media) and go with what is sent as its media. Used by
+// the message box, hand-off replies and editing a message. Each entry: {name, preview, url (once uploaded), promise}.
 const messageMedia = [];
-let messageMediaSeq = 0;
-
-function renderMessageMedia() {
-	const box = $('#message-media');
-	box.hidden = messageMedia.length === 0;
-	box.replaceChildren(...messageMedia.map((m) => {
-		const f = el(`<figure class="${m.url ? '' : 'uploading'}"><img src="${esc(m.preview)}" alt="${esc(m.name)}"><figcaption>${m.url ? esc(m.name) : 'Uploading…'}</figcaption><button type="button" class="remove" title="Remove this image" aria-label="Remove this image">&times;</button></figure>`);
-		$('.remove', f).addEventListener('click', () => {
-			const i = messageMedia.indexOf(m);
-			if (i >= 0) {
-				messageMedia.splice(i, 1);
-				URL.revokeObjectURL(m.preview);
-				renderMessageMedia();
-			}
-		});
-		return f;
-	}));
-}
+let mediaSeq = 0;
 
 async function uploadMedia(file, name) {
 	const res = await fetch(`${BASE}${P(`/media?name=${encodeURIComponent(name)}`)}`, {
@@ -1598,54 +1778,93 @@ async function uploadMedia(file, name) {
 	return data.url;
 }
 
-function addMessageImages(files) {
+// Sent media as attachment entries (already uploaded).
+function savedAttachments(media) {
+	return (media || []).filter((m) => m.url).map((m) => ({ name: m.caption || m.url.split('/').pop(), preview: mediaUrl(m.url), url: m.url, kind: m.kind || 'image' }));
+}
+
+// Attachment entries as media to send; waits for uploads first (failed ones drop out of the list).
+async function attachmentsToMedia(list) {
+	await Promise.all(list.map((m) => m.promise).filter(Boolean));
+	return list.filter((m) => m.url).map((m) => ({ url: m.url, kind: m.kind || 'image', caption: m.name }));
+}
+
+// Upload image files into `list`; onChange(list) runs on every change (added, uploaded, failed). Returns how many were
+// images.
+function addImages(list, files, onChange) {
 	const images = [...files].filter((f) => f && f.type.startsWith('image/'));
 	for (const file of images) {
 		const ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace(/[^a-z0-9]/g, '');
 		// Pasted screenshots are all called "image.png"; give each its own name.
-		const name = file.name && file.name !== 'image.png' ? file.name : `pasted-${++messageMediaSeq}.${ext}`;
-		const m = { name, preview: URL.createObjectURL(file), url: null };
+		const name = file.name && file.name !== 'image.png' ? file.name : `pasted-${Date.now().toString(36)}-${++mediaSeq}.${ext}`;
+		const m = { name, preview: URL.createObjectURL(file), url: null, kind: 'image' };
 		m.promise = uploadMedia(file, name).then((url) => {
 			m.url = url;
-			renderMessageMedia();
+			delete m.promise;
+			onChange(list);
 		}, (err) => {
-			const i = messageMedia.indexOf(m);
+			const i = list.indexOf(m);
 			if (i >= 0) {
-				messageMedia.splice(i, 1);
+				list.splice(i, 1);
 			}
-			renderMessageMedia();
+			onChange(list);
 			alert(`Could not upload ${name}: ${err.message}`);
 		});
-		messageMedia.push(m);
+		list.push(m);
 	}
-	renderMessageMedia();
+	if (images.length) {
+		onChange(list);
+	}
 	return images.length;
 }
 
-$('#message-text').addEventListener('paste', (e) => {
-	const files = [...(e.clipboardData?.items || [])].filter((i) => i.kind === 'file').map((i) => i.getAsFile());
-	if (addMessageImages(files)) {
-		// Text pasted along with an image (some apps put both on the clipboard) still goes in.
-		const text = e.clipboardData.getData('text/plain');
-		if (!text) {
-			e.preventDefault();
+// Thumbnails of `list` in `box`, each with a remove button.
+function renderAttachments(box, list, onChange) {
+	box.hidden = list.length === 0;
+	box.replaceChildren(...list.map((m) => {
+		const f = el(`<figure class="${m.url ? '' : 'uploading'}"><img src="${esc(m.preview)}" alt="${esc(m.name)}"><figcaption>${m.url ? esc(m.name) : 'Uploading…'}</figcaption><button type="button" class="remove" title="Remove this image" aria-label="Remove this image">&times;</button></figure>`);
+		$('.remove', f).addEventListener('click', () => {
+			const i = list.indexOf(m);
+			if (i >= 0) {
+				list.splice(i, 1);
+				onChange(list);
+			}
+		});
+		return f;
+	}));
+}
+
+// Paste and drop images into a textarea; getList() gives the list to add to.
+function acceptImages(ta, getList, onChange) {
+	ta.addEventListener('paste', (e) => {
+		const files = [...(e.clipboardData?.items || [])].filter((i) => i.kind === 'file').map((i) => i.getAsFile());
+		if (files.some((f) => f && f.type.startsWith('image/')) && addImages(getList(), files, onChange)) {
+			// Text pasted along with an image (some apps put both on the clipboard) still goes in.
+			if (!e.clipboardData.getData('text/plain')) {
+				e.preventDefault();
+			}
 		}
-	}
-});
-$('#message-text').addEventListener('dragover', (e) => {
-	if ([...(e.dataTransfer?.items || [])].some((i) => i.kind === 'file')) {
-		e.preventDefault();
-		e.currentTarget.classList.add('dragging');
-	}
-});
-$('#message-text').addEventListener('dragleave', (e) => e.currentTarget.classList.remove('dragging'));
-$('#message-text').addEventListener('drop', (e) => {
-	e.currentTarget.classList.remove('dragging');
-	if (e.dataTransfer?.files?.length) {
-		e.preventDefault();
-		addMessageImages(e.dataTransfer.files);
-	}
-});
+	});
+	ta.addEventListener('dragover', (e) => {
+		if ([...(e.dataTransfer?.items || [])].some((i) => i.kind === 'file')) {
+			e.preventDefault();
+			ta.classList.add('dragging');
+		}
+	});
+	ta.addEventListener('dragleave', () => ta.classList.remove('dragging'));
+	ta.addEventListener('drop', (e) => {
+		ta.classList.remove('dragging');
+		if (e.dataTransfer?.files?.length) {
+			e.preventDefault();
+			addImages(getList(), e.dataTransfer.files, onChange);
+		}
+	});
+}
+
+function renderMessageMedia() {
+	renderAttachments($('#message-media'), messageMedia, renderMessageMedia);
+}
+acceptImages($('#message-text'), () => messageMedia, renderMessageMedia);
 
 $('#message-send').addEventListener('click', async (e) => {
 	const button = e.currentTarget;
@@ -1655,8 +1874,7 @@ $('#message-send').addEventListener('click', async (e) => {
 	}
 	button.disabled = true;
 	try {
-		await Promise.all(messageMedia.map((m) => m.promise));
-		const media = messageMedia.filter((m) => m.url).map((m) => ({ url: m.url, kind: 'image', caption: m.name }));
+		const media = await attachmentsToMedia(messageMedia);
 		if (!ta.value.trim() && !media.length) {
 			return;
 		}

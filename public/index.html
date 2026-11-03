@@ -18,7 +18,6 @@
 	</nav>
 	<div class="spacer"></div>
 	<span class="agents" id="agents" title="Sub-agents this project may run at once"></span>
-	<span class="conn" id="conn" title="Live connection to the server"></span>
 	<button class="icon" id="resync" title="Reload this project from the server" aria-label="Reload this project from the server">&#8635;</button>
 	<button id="open-updates" title="Check for a new version" hidden>Updates</button>
 	<button id="open-rules" title="Rules for every project">Rules</button>
@@ -154,6 +153,7 @@
 	<form method="dialog">
 		<h2>Updates</h2>
 		<p id="updates-summary">Checking...</p>
+		<div id="updates-progress" class="update-progress" hidden><progress max="100"></progress><span class="hint"></span></div>
 		<pre id="updates-notes" class="update-notes" hidden></pre>
 		<p class="hint" id="updates-detail" hidden></p>
 		<menu><button type="button" id="updates-check">Check again</button><button value="cancel">Close</button><button type="button" id="updates-install" class="primary" hidden>Update now</button></menu>

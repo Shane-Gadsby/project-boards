@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.11.0 (2026-11-03)
+
+- Images can be pasted or dropped into a hand-off's note and answer boxes too. They wait with the unsent reply, go to
+  Claude with **Send**, and stay on the card, where they can be removed. `pb inbox` lists them.
+- A message Claude has not read yet can be **edited** (text and images) or **deleted**. Once Claude has read it, the
+  server refuses both. `pb inbox` says when a message was edited.
+- **Update now** shows a progress bar: the download with its size, then checking, unpacking, installing and restarting.
+- The live-connection dot is gone from the header.
+
 ## 1.10.0 (2026-11-03)
 
 - Images can be pasted or dropped into the **Send to Claude** box. They upload straight away, show as thumbnails that
