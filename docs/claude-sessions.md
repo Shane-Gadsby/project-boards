@@ -37,6 +37,18 @@ curl -fsSL https://boards.example.com/install | sh                  # -> ~/.loca
 curl -fsSL https://boards.example.com/install | sh -s -- <folder>   # -> <folder>/pb
 ```
 
+On Windows (native, not WSL), from PowerShell:
+
+```powershell
+irm https://boards.example.com/install.ps1 | iex                                   # -> %LOCALAPPDATA%\project-boards\pb
+& ([scriptblock]::Create((irm https://boards.example.com/install.ps1))) <folder>   # -> <folder>\pb
+```
+
+It writes `pb.cmd` beside `pb` (Windows cannot run a script by its `#!` line; Git Bash can, and uses `pb` itself) and
+adds the folder to the user's PATH (`$env:PB_NO_PATH=1` leaves PATH alone). From a session's shell, call it as
+`node "<folder>/pb"`, or `pb` once a new terminal has the PATH. `pb hook install` on Windows writes a hook that runs
+`node "<folder>/pb" hook`.
+
 Use the folder the user's instructions name for installed applications when there is one. The copy in a server's own folder
 is the source, and is never upgraded over itself.
 

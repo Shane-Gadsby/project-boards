@@ -134,6 +134,7 @@ On each machine running Claude Code (Node.js 18 or newer):
 
 - **No `pb` yet:** `curl -fsSL https://<your board>/install | sh`, then `pb login` using the path it prints. It installs to
   `~/.local/share/project-boards`, which is not on `PATH`; link it into a folder that is, as the installer explains.
+  On Windows, from PowerShell: `irm https://<your board>/install.ps1 | iex` (it adds itself to the user's PATH).
 
 `pb` belongs on the machines running Claude Code. The server install does not add it, and the board server needs it only
 if Claude Code runs there too. `pb` runs on whichever `node` is on `PATH`, so with nvm use it from a shell where nvm is loaded.

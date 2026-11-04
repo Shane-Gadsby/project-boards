@@ -1,0 +1,2 @@
+# pb is served byte for byte and must start "#!/usr/bin/env node" with LF line ends wherever the repo is checked out.
+* text=auto eol=lf

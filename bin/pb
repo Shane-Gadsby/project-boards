@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // pb: the Claude-side command line for Project Boards. Run `pb help`. One file, Node 18+, no dependencies: each server
-// publishes it at /pb (install: curl -fsSL <server>/install | sh; update: pb upgrade).
+// publishes it at /pb (install: curl -fsSL <server>/install | sh, or on Windows irm <server>/install.ps1 | iex; update:
+// pb upgrade). On Windows the installer puts a pb.cmd next to it that runs it with node.
 'use strict';
 
 const fs = require('fs');
@@ -11,7 +12,7 @@ const crypto = require('crypto');
 const { execFileSync, spawn } = require('child_process');
 
 // Bump on every change: the server reads this line to publish the version (GET /api/pb), and pb upgrade compares it.
-const VERSION = '1.13.0';
+const VERSION = '1.14.0';
 
 // Where pb self-update looks: the latest published release, which has pb and pb.sha256 attached. Drafts and pre-releases
 // are not offered.
@@ -64,6 +65,13 @@ const SELF = fs.realpathSync(process.argv[1]);
 // The copy in the server's own folder (next to server.js) is the source the server publishes, not an install.
 const IS_SOURCE = fs.existsSync(path.join(path.dirname(SELF), '..', 'server.js'));
 const DEPS_FILE = 'pb-deps.json';
+const WINDOWS = process.platform === 'win32';
+
+// Whether folder dir is folder root or inside it. Windows paths ignore case (and drive letters come either way).
+function isWithin(dir, root) {
+	const [d, r] = WINDOWS ? [dir.toLowerCase(), root.toLowerCase()] : [dir, root];
+	return d === r || d.startsWith(r.endsWith(path.sep) ? r : r + path.sep);
+}
 const CONFIG_DIR = path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'project-boards');
 const CREDENTIALS = path.join(CONFIG_DIR, 'credentials.json');
 
@@ -308,9 +316,10 @@ async function ensure() {
 }
 
 function openBrowser(url) {
-	const cmd = process.platform === 'darwin' ? ['open', [url]] : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] : ['xdg-open', [url]];
+	// On Windows, rundll32 hands the URL to the default browser without going through cmd, which would split it at &.
+	const cmd = process.platform === 'darwin' ? ['open', [url]] : WINDOWS ? ['rundll32', ['url.dll,FileProtocolHandler', url]] : ['xdg-open', [url]];
 	try {
-		const child = spawn(cmd[0], cmd[1], { stdio: 'ignore', detached: true });
+		const child = spawn(cmd[0], cmd[1], { stdio: 'ignore', detached: true, windowsHide: true });
 		child.on('error', () => {});
 		child.unref();
 		return true;
@@ -435,6 +444,19 @@ async function version(o) {
 	}
 }
 
+// Writes the new pb next to this one and renames it over this file. Windows refuses the rename while something (a virus
+// scanner, an editor) has the file open; then nothing changes and it says so.
+function replaceSelf(name, content) {
+	const tmp = path.join(path.dirname(SELF), name);
+	fs.writeFileSync(tmp, content, { mode: 0o755 });
+	try {
+		fs.renameSync(tmp, SELF);
+	} catch (e) {
+		fs.rmSync(tmp, { force: true });
+		die(`could not replace ${SELF} (${e.code || e.message}); nothing was changed. Close anything that has it open and try again`);
+	}
+}
+
 // pb upgrade: download the server's pb, check it against the published sha256, replace this file in one rename.
 async function upgrade(o) {
 	if (IS_SOURCE) {
@@ -451,9 +473,7 @@ async function upgrade(o) {
 	if (!res.ok || crypto.createHash('sha256').update(buf).digest('hex') !== info.sha256) {
 		die('the download does not match the published checksum (the server may have just changed it); try again');
 	}
-	const tmp = path.join(path.dirname(SELF), `.pb.upgrade.${process.pid}`);
-	fs.writeFileSync(tmp, buf, { mode: 0o755 });
-	fs.renameSync(tmp, SELF);
+	replaceSelf(`.pb.upgrade.${process.pid}`, buf);
 	console.log(`pb ${VERSION} -> ${info.version} (${SELF})`);
 }
 
@@ -490,7 +510,7 @@ async function findProject(o) {
 		} catch {
 			continue;
 		}
-		if ((cwd === real || cwd.startsWith(real + path.sep)) && (!best || real.length > best.len)) {
+		if (isWithin(cwd, real) && (!best || real.length > best.len)) {
 			best = { slug: p.slug, len: real.length };
 		}
 	}
@@ -988,7 +1008,7 @@ async function hookProject(st) {
 	for (const p of Array.isArray(list) ? list : []) {
 		try {
 			const real = p.path && fs.realpathSync(p.path);
-			if (real && (cwd === real || cwd.startsWith(real + path.sep)) && (!best || real.length > best.len)) {
+			if (real && isWithin(cwd, real) && (!best || real.length > best.len)) {
 				best = { slug: p.slug, len: real.length };
 			}
 		} catch {
@@ -1075,7 +1095,9 @@ function hookInstall(o, remove) {
 		}
 	}
 	settings.hooks = settings.hooks || {};
-	const command = `"${SELF}" hook`;
+	// Windows cannot run a script by its #! line, so the hook names node; forward slashes read the same in Git Bash,
+	// PowerShell and cmd, which Claude Code may use to run it.
+	const command = WINDOWS ? `node "${SELF.replace(/\\/g, '/')}" hook` : `"${SELF}" hook`;
 	for (const ev of ['PostToolUse', 'Stop']) {
 		const groups = (settings.hooks[ev] || [])
 			.map((g) => ({ ...g, hooks: (g.hooks || []).filter((x) => !isPbHook(x.command)) }))
@@ -1106,7 +1128,7 @@ function parseTaskFile(file) {
 		return null;
 	}
 	const id = m[1];
-	const lines = text.split('\n');
+	const lines = text.split(/\r?\n/);
 	let title = '';
 	const head = {};
 	let i = 0;
@@ -1229,9 +1251,7 @@ async function selfUpdate(o) {
 	const stamped = text
 		.replace(/^const DEFAULT_SERVER = '.*';$/m, () => `const DEFAULT_SERVER = '${DEFAULT_SERVER}';`)
 		.replace(/^const DEFAULT_LAN = '.*';$/m, () => `const DEFAULT_LAN = '${DEFAULT_LAN}';`);
-	const tmp = path.join(path.dirname(SELF), `.pb.self-update.${process.pid}`);
-	fs.writeFileSync(tmp, stamped, { mode: 0o755 });
-	fs.renameSync(tmp, SELF);
+	replaceSelf(`.pb.self-update.${process.pid}`, stamped);
 	console.log(`pb ${VERSION} -> ${latest} (${SELF})`);
 }
 

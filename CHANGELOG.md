@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.14.0 (2026-11-04)
+
+- `pb` installs on Windows 10 and 11. From PowerShell: `irm <board>/install.ps1 | iex`. It checks the download against
+  the published sha256 like the shell installer, puts `pb` and a `pb.cmd` in `%LOCALAPPDATA%\project-boards` (or the
+  folder given), and adds that folder to your PATH, so `pb` works from PowerShell, cmd and Git Bash.
+- On Windows, `pb hook install` writes a hook that runs `node "<path>/pb" hook`, `pb login` opens the browser
+  without going through cmd, a project is found by its folder whatever the case of the path, task files with Windows
+  line endings read correctly, and `pb upgrade` says so (and changes nothing) when Windows will not let it replace
+  itself.
+- The repository keeps LF line endings on Windows checkouts too, so a Windows server publishes a `pb` that runs.
+
 ## 1.13.0 (2026-11-04)
 
 - Clicking an image on a hand-off opens all of that hand-off's images (its own and the ones in your reply) one at a
