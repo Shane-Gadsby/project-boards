@@ -32,7 +32,7 @@ needs `Authorization: Bearer <app token>` or the page's session cookie.
 
 ## Logins
 
-Public in every mode: `/api/health`, `/api/auth/*`, `/api/pb`, `/pb`, `/install`, `/login`, `/login/device`,
+Public in every mode: `/api/health`, `/api/auth/*`, `/api/pb`, `/pb`, `/install`, `/install.ps1`, `/login`, `/login/device`,
 `/login.js`, `/style.css`, `/enrol`, `/onboard`, `/deps`, and shared docs (`/s/<token>`, `/api/shared/<token>`, with
 `doc.html`, `doc.js`, `render.js`). With the mode `required`, anything else without a valid
 credential gets 401 (API, media, non-GET) or a redirect to `/login?next=<path>` (pages).
@@ -60,9 +60,10 @@ token, then send `Authorization: Bearer <token>`.
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/pb` | `{version, sha256, size, url, install}` |
+| GET | `/api/pb` | `{version, sha256, size, url, install, installWindows}` |
 | GET | `/pb` | the script (`text/javascript`), with `X-Content-SHA256` |
 | GET | `/install` | a POSIX shell installer: `curl -fsSL <base>/install \| sh [-s -- <folder>]` |
+| GET | `/install.ps1` | a PowerShell installer for Windows: `irm <base>/install.ps1 \| iex` (writes `pb` and `pb.cmd`, adds the folder to the user's PATH) |
 
 ## Projects
 

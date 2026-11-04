@@ -13,13 +13,13 @@ const { enrolText } = require('./lib/enrol');
 const crypto = require('crypto');
 const { createAuth } = require('./lib/auth');
 const { depsText } = require('./lib/deps-guide');
-const { installScript } = require('./lib/install');
+const { installScript, installPs1Script } = require('./lib/install');
 const { upgradeText } = require('./lib/upgrade-guide');
 const { createUpdater } = require('./lib/updater');
 const { createDocs, RAW_TYPES, SANDBOX_CSP } = require('./lib/docs');
 const { deriveStatus, resolutionOf, firstWord, STATUSES } = require('./lib/status');
 
-const VERSION = '1.13.0';
+const VERSION = '1.14.0';
 const ROOT = __dirname;
 const PORT = Number(process.env.PB_PORT || 4780);
 const HOST = process.env.PB_HOST || '0.0.0.0';
@@ -1066,7 +1066,7 @@ function isPublic(parts) {
 		return ['health', 'auth', 'pb', 'shared'].includes(parts[1]);
 	}
 	// "s": a doc's share link (the token is the permission); doc.html and render.js are the page that shows it.
-	return ['login', 'login.js', 'style.css', 'pb', 'install', 'install-rhel', 'upgrade', 'enrol', 'enroll', 'onboard', 'deps', 's', 'doc.html', 'doc.js', 'render.js'].includes(parts[0]);
+	return ['login', 'login.js', 'style.css', 'pb', 'install', 'install.ps1', 'install-rhel', 'upgrade', 'enrol', 'enroll', 'onboard', 'deps', 's', 'doc.html', 'doc.js', 'render.js'].includes(parts[0]);
 }
 
 // Answers and messages are the user's words; an app token must not be able to put them in Claude's inbox.
@@ -1223,7 +1223,7 @@ async function route(req, res) {
 			if (!cli) {
 				throw httpError(404, 'bin/pb is missing on the server');
 			}
-			return send(res, 200, { version: cli.version, sha256: cli.sha256, size: cli.size, url: `${baseUrl(req)}/pb`, install: `curl -fsSL ${baseUrl(req)}/install | sh` });
+			return send(res, 200, { version: cli.version, sha256: cli.sha256, size: cli.size, url: `${baseUrl(req)}/pb`, install: `curl -fsSL ${baseUrl(req)}/install | sh`, installWindows: `irm ${baseUrl(req)}/install.ps1 | iex` });
 		}
 		if (a === 'rules' && !slug) {
 			if (method === 'GET') {
@@ -1626,6 +1626,9 @@ async function route(req, res) {
 	}
 	if (parts[0] === 'install' && parts.length === 1 && method === 'GET') {
 		return send(res, 200, installScript({ base: baseUrl(req) }), { 'Content-Type': 'text/plain; charset=utf-8' });
+	}
+	if (parts[0] === 'install.ps1' && parts.length === 1 && method === 'GET') {
+		return send(res, 200, installPs1Script({ base: baseUrl(req) }), { 'Content-Type': 'text/plain; charset=utf-8' });
 	}
 	if (parts[0] === 'login' && method === 'GET' && (parts.length === 1 || (parts.length === 2 && parts[1] === 'device'))) {
 		return servePage(req, res, path.join(PUBLIC, 'login.html'));

@@ -29,6 +29,8 @@ i=0; until curl -fsS "$BASE/api/health" >/dev/null 2>&1; do i=$((i + 1)); [ $i -
 
 check "install" sh -c "curl -fsSL $BASE/install | sh -s -- $WORK/bin"
 PB="$WORK/bin/pb"
+check "windows installer" sh -c "curl -fsSL $BASE/install.ps1 | grep -qF \"\$Base = '$BASE'\""
+check "windows install command" sh -c "curl -fsSL $BASE/api/pb | grep -qF 'irm $BASE/install.ps1 | iex'"
 mkdir -p "$WORK/repo/sub"; cd "$WORK/repo"
 check "stamped with its server" grep -q "^const DEFAULT_SERVER = '$BASE';" "$PB"
 check "ensure" "$PB" ensure

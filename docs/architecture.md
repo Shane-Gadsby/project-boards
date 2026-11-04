@@ -24,7 +24,7 @@ browser (the user)          Claude Code sessions
 | `lib/deps-guide.js` | The `/deps` page (markdown): waiting on other projects' tasks. |
 | `lib/cli-setup.js` | The "get pb and sign in" steps printed on `/enrol`, `/onboard` and `/deps`. |
 | `lib/auth.js` | Logins: password check, sessions, app tokens, the device flow, rate limits, the mode. |
-| `lib/install.js` | The `/install` shell script. |
+| `lib/install.js` | The `/install` shell script and the `/install.ps1` PowerShell script for Windows. |
 | `lib/docs.js` | Docs: storage, versions and history, unread-by-Claude tracking, share links, raw content types. |
 | `public/render.js` | The markdown renderer and per-format doc rendering, shared by the board and the full-page view. |
 | `public/doc.html`, `doc.js` | A doc full page: `/d/<project>/<id>` (signed in, live) and `/s/<token>` (shared). |
