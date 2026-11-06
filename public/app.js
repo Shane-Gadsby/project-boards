@@ -570,7 +570,8 @@ function renderHandoffCard(h) {
 	const n = el(`<article class="card ${h.state} ${h.kind === 'message' ? 'message' : ''}"></article>`);
 	const meta = [h.kind !== 'choice' ? `<span class="tag">${esc(h.kind)}</span>` : '', h.lane ? `<span class="tag">${esc((lanes().find((l) => l.id === h.lane) || {}).name || h.lane)}</span>` : '',
 		h.source ? `<span>${esc(h.source)}</span>` : '', `<span>${esc(ago(h.created))}</span>`].filter(Boolean).join('');
-	let html = `<h4>${esc(h.title || (h.kind === 'message' ? 'Message' : h.question))}</h4><div class="meta">${meta}</div>`;
+	const title = esc(h.title || (h.kind === 'message' ? 'Message' : h.question));
+	let html = `<h4><button type="button" class="collapse" aria-expanded="true" title="Collapse to the title"></button><span class="htitle">${title}</span>${h.kind === 'message' && h.question ? `<span class="hshort">${esc(h.question.split('\n').find((l) => l.trim()) || '')}</span>` : ''}</h4><div class="meta">${meta}</div>`;
 	if (h.question && h.title) {
 		html += `<div class="question">${esc(h.question)}</div>`;
 	} else if (h.question && h.kind === 'message') {
@@ -652,7 +653,57 @@ function renderHandoffCard(h) {
 	}
 	n.insertAdjacentHTML('beforeend', statusLine(h));
 	updateUnsent(n, h.id);
+	setCollapsed(n, isCollapsed(h.id));
+	$('h4', n).addEventListener('click', (e) => {
+		// The title row is the toggle; a text selection in it is not a click.
+		if (!e.target.closest('.collapse') && String(getSelection())) {
+			return;
+		}
+		const now = !n.classList.contains('collapsed');
+		setCollapsed(n, now);
+		saveCollapsed(h.id, now);
+	});
 	return n;
+}
+
+// Cards collapsed to their titles, per project, remembered in this browser only (a viewing convenience, not shared).
+// Hand-offs are kept by id, tasks as "t:<id>".
+function collapsedSet() {
+	try {
+		const all = JSON.parse(localStorage.getItem('pb.collapsed') || '{}');
+		return new Set(all[state.slug] || []);
+	} catch {
+		return new Set();
+	}
+}
+
+function isCollapsed(id) {
+	return collapsedSet().has(id);
+}
+
+function saveCollapsed(id, on) {
+	try {
+		const all = JSON.parse(localStorage.getItem('pb.collapsed') || '{}');
+		const ids = new Set(all[state.slug] || []);
+		if (on) {
+			ids.add(id);
+		} else {
+			ids.delete(id);
+		}
+		// Forget hand-offs that are gone, so the list does not grow for ever.
+		all[state.slug] = [...ids].filter((x) => (x.startsWith('t:') ? state.tasks.has(x.slice(2)) : state.handoffs.has(x)));
+		localStorage.setItem('pb.collapsed', JSON.stringify(all));
+	} catch {
+		// Storage can be unavailable: the card still collapses until the page is reloaded.
+	}
+}
+
+function setCollapsed(n, on) {
+	n.classList.toggle('collapsed', on);
+	const b = $('.collapse', n);
+	b.setAttribute('aria-expanded', String(!on));
+	b.title = on ? 'Show the whole card' : 'Collapse to the title';
+	b.setAttribute('aria-label', b.title);
 }
 
 // A message Claude has not read yet can be changed or deleted. While editing, the draft {text, media} lives in
@@ -933,13 +984,22 @@ function renderTaskCard(t) {
 	const from = t.status === 'done' ? [] : [...new Set(neededBy(t).map((w) => w.from))];
 	const needed = from.length ? `<span class="tag needed" title="${esc(neededBy(t).map((w) => `${w.from}${w.why ? `: ${w.why}` : ''}`).join('\n'))}">needed by ${esc(from.join(', '))}</span>` : '';
 	const n = el(`<div class="task" tabindex="0">
-		<div><span class="tid">#${esc(t.id)}</span><span class="ttitle">${esc(t.title)}</span></div>
+		<div class="thead"><button type="button" class="collapse" aria-expanded="true" title="Collapse to the title"></button><span class="tid">#${esc(t.id)}</span><span class="ttitle">${esc(t.title)}</span></div>
 		<div class="tmeta"><span class="state" title="${esc(t.state)}">${esc(t.state || t.status)}</span>${t.owner ? `<span>${esc(t.owner)}</span>` : ''}<span>${esc(ago(t.updated))}</span>${needed}</div>
 	</div>`);
+	const key = `t:${t.id}`;
+	setCollapsed(n, isCollapsed(key));
+	$('.collapse', n).addEventListener('click', (e) => {
+		// Folds the card; a click anywhere else on it still opens the task.
+		e.stopPropagation();
+		const now = !n.classList.contains('collapsed');
+		setCollapsed(n, now);
+		saveCollapsed(key, now);
+	});
 	const open = () => openTask(String(t.id));
 	n.addEventListener('click', open);
 	n.addEventListener('keydown', (e) => {
-		if (e.key === 'Enter') {
+		if (e.key === 'Enter' && e.target === n) {
 			open();
 		}
 	});

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.15.0 (2026-11-06)
+
+- Fold a card down to its title so long-running cards take less room. On a hand-off, click the title or the arrow
+  beside it; on a task, click the arrow (a click anywhere else still opens the task). Click again to open it out.
+  Folded cards are remembered per project in this browser, so they stay folded across reloads and when Claude updates
+  them. A folded message shows the start of its text, and a folded card with an unsent draft still says so.
+
 ## 1.14.0 (2026-11-04)
 
 - `pb` installs on Windows 10 and 11. From PowerShell: `irm <board>/install.ps1 | iex`. It checks the download against

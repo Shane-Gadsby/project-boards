@@ -90,7 +90,19 @@ main { padding: 16px; max-width: 1500px; margin: 0 auto; }
 .card.answered { border-left: 3px solid var(--warn); }
 .card.acted { border-left: 3px solid var(--good); opacity: 0.92; }
 .card.message { border-left: 3px solid var(--accent); }
-.card h4 { margin: 0 0 4px; font-size: 14px; }
+.card h4 { margin: 0 0 4px; font-size: 14px; display: flex; align-items: flex-start; gap: 4px; cursor: pointer; }
+.card h4 .collapse { flex: none; border: none; background: none; padding: 0 2px; margin: 0 0 0 -4px; color: var(--muted); font-size: 12px; line-height: 20px; width: 18px; }
+.card h4 .collapse::before { content: "\25BE"; }
+.card.collapsed h4 .collapse::before { content: "\25B8"; }
+.card h4 .collapse:hover { color: var(--accent); }
+.card.collapsed { padding-top: 7px; padding-bottom: 7px; align-self: start; }
+.card h4 .hshort { display: none; }
+/* A collapsed message shows the start of what was said, not just "Message from the user". */
+.card.collapsed h4:has(.hshort) .htitle { display: none; }
+.card.collapsed h4 .hshort { display: block; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card.collapsed h4 { margin: 0; }
+.card.collapsed h4 .htitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card.collapsed > :not(h4):not(.unsent) { display: none !important; }
 .card .meta { color: var(--muted); font-size: 12px; margin-bottom: 6px; display: flex; gap: 8px; flex-wrap: wrap; }
 .card .question { white-space: pre-wrap; margin: 4px 0 6px; }
 .card .context { color: #4b5366; font-size: 13px; white-space: pre-wrap; background: #f7f8fa; border-radius: 6px; padding: 6px 8px; margin: 6px 0; }
@@ -138,6 +150,15 @@ main { padding: 16px; max-width: 1500px; margin: 0 auto; }
 .task:hover { border-color: #b9c0cc; }
 .task .tid { color: var(--muted); font-size: 12px; margin-right: 4px; }
 .task .ttitle { font-weight: 550; }
+.task .thead { display: flex; align-items: baseline; gap: 2px; min-width: 0; }
+.task .thead .collapse { flex: none; border: none; background: none; padding: 0 2px; margin-left: -4px; color: var(--muted); font-size: 12px; width: 18px; }
+.task .thead .collapse::before { content: "\25BE"; }
+.task.collapsed .thead .collapse::before { content: "\25B8"; }
+.task .thead .collapse:hover { color: var(--accent); }
+.task .tid { flex: none; }
+.task.collapsed { padding-top: 5px; padding-bottom: 5px; }
+.task.collapsed .ttitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task.collapsed .tmeta { display: none; }
 .task .tmeta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; font-size: 12px; color: var(--muted); }
 .state { display: inline-block; padding: 0 6px; border-radius: 4px; font-size: 11.5px; background: #eef0f4; color: #475066; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .column[data-status="active"] .state { background: var(--warn-soft); color: #8a5a07; }
