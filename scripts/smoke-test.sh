@@ -114,6 +114,34 @@ has "is in the inbox" "] set "
 check "hook install" "$PB" hook install
 check "settings written" grep -q '" hook"' "$WORK/repo/.claude/settings.local.json"
 
+# Reports and ingest keys: a key can only add reports, to its own project, and nothing else.
+cd "$WORK/repo"
+check "make an ingest key" sh -c "\"$PB\" key new --name 'beta build' > \"$WORK/key.out\""
+KEY=$(grep -o 'pbk_[A-Za-z0-9_-]*' "$WORK/key.out" | head -1)
+check "the key is printed once" sh -c "[ -n \"$KEY\" ]"
+check "listed without its secret" sh -c "\"$PB\" keys | grep -q 'beta build'; ! \"$PB\" keys | grep -q \"$KEY\""
+same "the key checks out" 200 "$(code "$BASE/api/ingest" -H "Authorization: Bearer $KEY")"
+same "a report arrives" 201 "$(code -X POST "$BASE/api/ingest" -H "$J" -H "Authorization: Bearer $KEY" -d '{"title":"Crash","kind":"crash","app":"Demo","data":{"a":1}}')"
+same "a made-up key is refused" 401 "$(code -X POST "$BASE/api/ingest" -H "$J" -H 'Authorization: Bearer pbk_0000000000000000_aaaaaaaaaaaaaaaaaaaaaa' -d '{}')"
+same "a key cannot read tasks" 403 "$(code "$BASE/api/projects/demo/tasks" -H "Authorization: Bearer $KEY")"
+same "a key cannot read reports" 403 "$(code "$BASE/api/projects/demo/reports" -H "Authorization: Bearer $KEY")"
+same "a key cannot make keys" 403 "$(code -X POST "$BASE/api/projects/demo/keys" -H "$J" -H "Authorization: Bearer $KEY" -d '{"name":"no"}')"
+check "the report is listed" "$PB" reports
+has "with its title" "Crash"
+RID=$(sed -n '1s/ .*//p' "$WORK/out")
+check "read it in full" sh -c "\"$PB\" report $RID"
+has "with its payload" '"a": 1'
+check "triage it" sh -c "\"$PB\" report done $RID"
+check "and it is done" sh -c "! \"$PB\" reports --status new | grep -q $RID"
+KID=$("$PB" keys | sed -n '1s/ .*//p')
+check "rotate the key" sh -c "\"$PB\" key rotate $KID > \"$WORK/key2.out\""
+same "the old key stops working" 401 "$(code -X POST "$BASE/api/ingest" -H "$J" -H "Authorization: Bearer $KEY" -d '{"title":"no"}')"
+KEY2=$(grep -o 'pbk_[A-Za-z0-9_-]*' "$WORK/key2.out" | head -1)
+same "the new one works" 201 "$(code -X POST "$BASE/api/ingest" -H "$J" -H "Authorization: Bearer $KEY2" -d '{"title":"after rotating"}')"
+check "revoke it" "$PB" key revoke "$KID"
+same "and it is refused" 401 "$(code -X POST "$BASE/api/ingest" -H "$J" -H "Authorization: Bearer $KEY2" -d '{"title":"no"}')"
+check "what's new reads" sh -c "curl -fsS $BASE/whatsnew | grep -q 'ingest key'"
+
 # A sub-path, alongside the root.
 SUB=$((PORT + 2))
 PB_AUTH=off PB_HOST=127.0.0.1 PB_PORT=$SUB PB_DATA="$WORK/data2" PB_BASE_PATH=/projects node "$ROOT/server.js" >"$WORK/sub.log" 2>&1 &

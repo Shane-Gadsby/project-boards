@@ -256,6 +256,10 @@ a.button:hover { border-color: #b9c0cc; }
 .doc-meta { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: 12px; color: var(--muted); }
 .tag.shared { background: var(--good-soft); color: var(--good); }
 .doc-pane { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 18px; min-height: 60vh; min-width: 0; }
+.report-fields { max-width: 560px; }
+.report-fields th { width: 110px; white-space: nowrap; }
+.report-text { background: #f3f4f7; padding: 10px 12px; border-radius: 6px; overflow: auto; font-size: 12.5px; line-height: 1.5; margin: 10px 0 0; white-space: pre-wrap; word-break: break-word; max-height: 60vh; }
+.keys-section { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 6px; }
 .doc-empty { padding: 40px 10px; text-align: center; line-height: 1.7; }
 .doc-head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 12px; }
 .doc-head h2 { margin: 0 0 4px; font-size: 18px; }

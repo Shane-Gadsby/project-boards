@@ -26,6 +26,8 @@ browser (the user)          Claude Code sessions
 | `lib/auth.js` | Logins: password check, sessions, app tokens, the device flow, rate limits, the mode. |
 | `lib/install.js` | The `/install` shell script and the `/install.ps1` PowerShell script for Windows. |
 | `lib/docs.js` | Docs: storage, versions and history, unread-by-Claude tracking, share links, raw content types. |
+| `lib/reports.js` | Reports from builds out in the world, and the write-only ingest keys they arrive on (rate limits, rotation). |
+| `lib/whatsnew.js` | The `/whatsnew` page: what to tell a session that was enrolled before a feature existed. |
 | `public/render.js` | The markdown renderer and per-format doc rendering, shared by the board and the full-page view. |
 | `public/doc.html`, `doc.js` | A doc full page: `/d/<project>/<id>` (signed in, live) and `/s/<token>` (shared). |
 | `public/login.html`, `login.js` | Sign-in and app-approval pages (`/login`, `/login/device`). |

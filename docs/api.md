@@ -191,6 +191,39 @@ never enter the board's page: they load from the raw URL into an `<iframe sandbo
 the raw answer itself carries a CSP sandbox, so their scripts run in an opaque origin: no cookies, no access to the
 board page, no authenticated requests to the API.
 
+## Reports and ingest keys
+
+Reports are what a build out in the world sends back: crash reports, diagnostics, a tester's notes. They arrive on
+**one** endpoint with an **ingest key**, a write-only credential for one project. A key can do nothing else: any other
+path with an ingest key is refused with 403, whatever the login mode.
+
+| Method | Path | Body / query | Returns |
+|---|---|---|---|
+| POST | `/api/ingest` | `Authorization: Bearer pbk_<id>_<secret>`; `{title?, kind?, summary?, app?, version?, platform?, contact?, text?, data?}` | 201 `{ok: true, id}` |
+| GET | `/api/ingest` | the same header | `{ok: true}`: a build checking its key, told nothing else |
+| GET | `{p}/reports` | `?status=new\|kept\|done`, `?q=<text>`, `?limit=<n>` | reports **without** `text`/`data` (with `hasText`, `hasData`), newest first |
+| GET | `{p}/reports/{id}` | | the report in full |
+| GET | `{p}/reports/{id}/raw` | | its `data` alone (the whole record when it has none) |
+| PATCH | `{p}/reports/{id}` | `{status: "new"\|"kept"\|"done"}` | the report's metadata |
+| DELETE | `{p}/reports/{id}` | | `{deleted}` |
+| GET | `{p}/keys` | | `{keys: [...], url, limits, maxBytes}`; a key's secret is never returned |
+| POST | `{p}/keys` | `{name}` | 201 the key, **with `key` once**: `pbk_<id>_<secret>` |
+| POST | `{p}/keys/{id}/rotate` | | the key with a new secret; the old one stops working at once |
+| PATCH | `{p}/keys/{id}` | `{name?, disabled?}` | the key |
+| DELETE | `{p}/keys/{id}` | | `{revoked}` |
+
+Report fields: `id` (`<yyyymmddhhmmss>-<4 hex>`, newest sorts last), `received`, `status`, `key: {id, name}`, `from`
+(the address it came from), `title`, `kind`, `summary`, `app`, `version`, `platform`, `contact`, `text`, `data` (any
+JSON), `size`, and `statusAt`/`statusBy` once triaged.
+
+Limits (environment, with their defaults): `PB_INGEST_MAX` 262144 bytes a report, `PB_REPORTS_MAX` 2000 reports a
+project (the oldest go, done ones first), `PB_INGEST_PER_KEY_MINUTE` 20, `PB_INGEST_PER_KEY_HOUR` 200,
+`PB_INGEST_PER_IP_MINUTE` 30, `PB_INGEST_PER_IP_HOUR` 300. Over a limit: 429. Over the size: 413. An archived
+project takes no reports (409).
+
+Only the SHA-256 of a key is stored, so a lost key is rotated, never recovered. Keys are made and rotated by a
+signed-in browser or an app token (`pb key new`), never by an ingest key.
+
 ## Media
 
 | Method | Path | Body | Returns |
@@ -203,7 +236,7 @@ board page, no authenticated requests to the API.
 `GET {p}/events` is a Server-Sent Events stream for the page: first `{type: "hello", seq}`, then one event per change:
 
 ```json
-{"seq": 42, "at": "...", "type": "task|handoff|doc|project|rules|watchers", "action": "create|update|delete|answer|ack", "actor": "user|claude|import", "id": "...", "record": {...}}
+{"seq": 42, "at": "...", "type": "task|handoff|doc|report|key|project|rules|watchers", "action": "create|update|delete|answer|ack", "actor": "user|claude|import", "id": "...", "record": {...}}
 ```
 
 A `watchers` event (`{type: "watchers", record: <neededBy map>}`) is sent when a project starts or stops waiting on

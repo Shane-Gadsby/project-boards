@@ -20,6 +20,8 @@ const state = {
 	docs: new Map(), // id -> doc without content
 	doc: null, // the open doc: {id, version (null = latest), record (with content)}
 	docEdit: null, // while editing: {id (null = new), baseVersion, dirty, conflict}
+	reports: new Map(), // id -> report without its payload (what a build sent in)
+	report: null, // the open report, payload and all
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -106,7 +108,7 @@ async function loadProjects() {
 	}
 }
 
-const TABS = ['handoffs', 'tasks', 'docs'];
+const TABS = ['handoffs', 'tasks', 'docs', 'reports'];
 
 // #/<project>/<tab>, and #/<project>/docs/<doc id> for an open doc.
 function routeFromHash() {
@@ -136,6 +138,8 @@ async function selectProject(slug) {
 	state.tasks.clear();
 	state.handoffs.clear();
 	state.docs.clear();
+	state.reports.clear();
+	state.report = null;
 	state.openTask = null;
 	state.doc = null;
 	state.docEdit = null;
@@ -150,10 +154,12 @@ async function selectProject(slug) {
 
 // Fill state from the server. False if the user moved to another project while this was loading.
 async function loadProject(slug) {
-	const [project, tasks, handoffs, watchers, docs] = await Promise.all([api('GET', P()), api('GET', P('/tasks')), api('GET', P('/handoffs')), api('GET', P('/watchers')), api('GET', P('/docs'))]);
+	const [project, tasks, handoffs, watchers, docs, reports] = await Promise.all([api('GET', P()), api('GET', P('/tasks')), api('GET', P('/handoffs')),
+		api('GET', P('/watchers')), api('GET', P('/docs')), api('GET', P('/reports'))]);
 	if (slug !== state.slug) {
 		return false;
 	}
+	state.reports = new Map(reports.map((r) => [String(r.id), r]));
 	const known = state.tasks;
 	state.project = project;
 	state.neededBy = watchers.neededBy || {};
@@ -171,7 +177,7 @@ async function resync() {
 	if (!slug || !(await loadProject(slug))) {
 		return;
 	}
-	for (const what of ['header', 'handoffs', 'tasks', 'docs']) {
+	for (const what of ['header', 'handoffs', 'tasks', 'docs', 'reports']) {
 		scheduleRender(what);
 	}
 	if (state.openTask) {
@@ -247,6 +253,19 @@ function connectEvents(reconnecting = false) {
 			}
 			docChanged(String(ev.id), ev);
 			scheduleRender('docs');
+		} else if (ev.type === 'report') {
+			if (ev.action === 'delete') {
+				state.reports.delete(String(ev.id));
+				if (state.report && state.report.id === String(ev.id)) {
+					state.report = null;
+				}
+			} else {
+				state.reports.set(String(ev.id), ev.record);
+				if (state.report && state.report.id === String(ev.id)) {
+					state.report = { ...state.report, ...ev.record };
+				}
+			}
+			scheduleRender('reports');
 		} else if (ev.type === 'watchers') {
 			state.neededBy = ev.record || {};
 			scheduleRender('tasks');
@@ -362,6 +381,9 @@ function scheduleRender(what) {
 		if (w.has('docs')) {
 			renderDocList();
 		}
+		if (w.has('reports')) {
+			renderReports();
+		}
 		renderBadges();
 	});
 }
@@ -403,6 +425,7 @@ function renderAll() {
 	renderHandoffs();
 	renderTasks();
 	renderDocs();
+	renderReports();
 	renderBadges();
 }
 
@@ -427,6 +450,7 @@ function renderTabs() {
 	$('#tab-handoffs').hidden = state.tab !== 'handoffs';
 	$('#tab-tasks').hidden = state.tab !== 'tasks';
 	$('#tab-docs').hidden = state.tab !== 'docs';
+	$('#tab-reports').hidden = state.tab !== 'reports';
 }
 
 function renderBadges() {
@@ -435,6 +459,7 @@ function renderBadges() {
 	const active = [...state.tasks.values()].filter((t) => t.status === 'active').length;
 	$('#badge-tasks').textContent = active ? `${active} active` : '';
 	$('#badge-docs').textContent = state.docs.size || '';
+	$('#badge-reports').textContent = [...state.reports.values()].filter((r) => r.status === 'new').length || '';
 	document.title = waiting ? `(${waiting}) Project Boards` : 'Project Boards';
 }
 
@@ -1066,6 +1091,8 @@ function openSettings() {
 	f.lanes.value = (p.lanes || []).map((l) => l.name).join(', ');
 	f.banner.value = p.banner || '';
 	$('#onboard-url').textContent = `${location.origin}${BASE}/onboard/${p.slug}`;
+	$('#new-key').hidden = true; // a key shown earlier is not shown again
+	renderKeys().catch(() => {});
 	$('#settings').showModal();
 }
 
@@ -1155,7 +1182,7 @@ $('#restore-project').addEventListener('click', () => setArchived(false).catch((
 $('#open-delete-project').addEventListener('click', () => {
 	const n = (count, word) => `${count || 0} ${word}${count === 1 ? '' : 's'}`;
 	$('#delete-project-name').textContent = state.project.name;
-	$('#delete-project-counts').textContent = `${n(state.tasks.size, 'task')}, ${n(state.handoffs.size, 'hand-off')} and ${n(state.docs.size, 'doc')}`;
+	$('#delete-project-counts').textContent = `${n(state.tasks.size, 'task')}, ${n(state.handoffs.size, 'hand-off')}, ${n(state.docs.size, 'doc')} and ${n(state.reports.size, 'report')}`;
 	$('#delete-project-slug').textContent = state.slug;
 	$('#delete-project-form').confirm.value = '';
 	$('#delete-project-confirm').disabled = true;
@@ -1176,6 +1203,186 @@ $('#delete-project-form').addEventListener('submit', async (e) => {
 		} catch (err) {
 			alert(err.message);
 		}
+	}
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Reports: what builds out in the world sent in on an ingest key, and the keys themselves
+
+const REPORT_STATUS = { new: 'New', kept: 'Kept', done: 'Done' };
+
+function reportWhere(r) {
+	return [r.app, r.version, r.platform].filter(Boolean).join(' · ');
+}
+
+function renderReports() {
+	renderReportList();
+	renderReportPane();
+}
+
+function renderReportList() {
+	const filter = $('#report-filter').value.trim().toLowerCase();
+	const status = $('#report-status').value;
+	const list = [...state.reports.values()]
+		.filter((r) => (!status || r.status === status) && (!filter || `${r.id} ${r.title} ${r.kind} ${r.summary} ${reportWhere(r)} ${r.contact}`.toLowerCase().includes(filter)))
+		.sort((a, b) => String(b.id).localeCompare(String(a.id)));
+	const open = state.report && state.report.id;
+	const nodes = list.map((r) => {
+		const n = el(`<button type="button" class="doc-item${r.id === open ? ' active' : ''}">
+			<span class="doc-title">${esc(r.title)}</span>
+			<span class="doc-meta">${r.status === 'new' ? '<span class="tag needed">new</span>' : `<span class="tag">${esc(REPORT_STATUS[r.status] || r.status)}</span>`}<span class="tag">${esc(r.kind)}</span><span>${esc(ago(r.received))}${reportWhere(r) ? ` · ${esc(reportWhere(r))}` : ''}</span></span>
+		</button>`);
+		n.addEventListener('click', () => openReport(r.id));
+		return n;
+	});
+	const none = state.reports.size
+		? 'No report matches.'
+		: 'No reports yet. A build out in the world sends them with an ingest key (Project settings &gt; Ingest keys): crash reports, diagnostics, a tester’s notes.';
+	$('#report-list').replaceChildren(...(nodes.length ? nodes : [el(`<div class="none">${none}</div>`)]));
+}
+
+async function openReport(id) {
+	try {
+		state.report = await api('GET', P(`/reports/${encodeURIComponent(id)}`));
+	} catch (e) {
+		state.report = null;
+		alert(e.message);
+	}
+	state.tab = 'reports';
+	setHash();
+	renderTabs();
+	renderReports();
+}
+
+function renderReportPane() {
+	const pane = $('#report-pane');
+	if (!state.report) {
+		pane.replaceChildren(el('<div class="none doc-empty">Pick a report on the left.<br>Reports come from builds out in the world (crash reports, diagnostics, a tester’s notes). They arrive on an ingest key, which can only add reports to this project and can read nothing. Claude sessions read them with <code>pb reports</code>.</div>'));
+		return;
+	}
+	const r = state.report;
+	const rows = [['Received', `${new Date(r.received).toLocaleString()} (${ago(r.received)})`], ['Kind', r.kind], ['App', [r.app, r.version].filter(Boolean).join(' ')],
+		['Platform', r.platform], ['Contact', r.contact], ['Key', `${r.key ? r.key.name : ''}`], ['From', r.from], ['Size', `${Math.ceil((r.size || 0) / 1024)} KB`]]
+		.filter(([, v]) => v).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('');
+	const head = el(`<div class="doc-head">
+		<div class="doc-head-text"><h2>${esc(r.title)}</h2>
+			<div class="doc-meta"><span class="tag">${esc(REPORT_STATUS[r.status] || r.status)}</span><span>${esc(r.id)}</span></div>
+			${r.summary ? `<div class="hint">${esc(r.summary)}</div>` : ''}
+		</div>
+		<div class="doc-actions">
+			${r.status === 'done' ? '<button type="button" data-ract="new">Mark unread</button>' : '<button type="button" data-ract="done">Mark done</button>'}
+			${r.status === 'kept' ? '' : '<button type="button" data-ract="keep">Keep</button>'}
+			<button type="button" data-ract="task">Make a task</button>
+			<button type="button" data-ract="copy">Copy JSON</button>
+			<button type="button" data-ract="delete">Delete</button>
+		</div>
+	</div>`);
+	const parts = [head, el(`<table class="access-table report-fields">${rows}</table>`)];
+	if (r.text) {
+		parts.push(el(`<pre class="report-text">${esc(r.text)}</pre>`));
+	}
+	if (r.data !== null && r.data !== undefined) {
+		parts.push(el(`<pre class="report-text">${esc(JSON.stringify(r.data, null, 2))}</pre>`));
+	}
+	pane.replaceChildren(...parts);
+	pane.onclick = (e) => {
+		const act = e.target.closest('[data-ract]');
+		if (act) {
+			reportAction(act.dataset.ract).catch((err) => alert(err.message));
+		}
+	};
+}
+
+async function reportAction(act) {
+	const r = state.report;
+	const path = P(`/reports/${encodeURIComponent(r.id)}`);
+	if (act === 'done' || act === 'keep' || act === 'new') {
+		await api('PATCH', path, { status: act });
+		state.report = { ...r, status: act };
+		renderReports();
+	} else if (act === 'copy') {
+		copyText(JSON.stringify(r, null, 2));
+	} else if (act === 'task') {
+		const title = prompt('Task title:', r.title);
+		if (title) {
+			const t = await api('POST', P('/tasks'), { title, state: 'open', body: `From report ${r.id} (${reportWhere(r)})\n\n${r.summary || ''}\n\n${r.text || ''}` });
+			await api('PATCH', path, { status: 'done' });
+			state.tab = 'tasks';
+			setHash();
+			renderTabs();
+			openTask(String(t.id));
+		}
+	} else if (act === 'delete') {
+		if (confirm('Delete this report? This cannot be undone.')) {
+			await api('DELETE', path);
+			state.report = null;
+			renderReports();
+		}
+	}
+}
+
+$('#report-filter').addEventListener('input', debounce(renderReportList, 100));
+$('#report-status').addEventListener('change', renderReportList);
+
+// Ingest keys, in Project settings: made and rotated here, and by a Claude session with pb key new.
+async function renderKeys() {
+	const box = $('#keys-table');
+	try {
+		const r = await api('GET', P('/keys'));
+		const rows = r.keys.map((k) => {
+			const tr = el(`<tr><td>${esc(k.name)}${k.disabled ? ' <span class="tag">off</span>' : ''}</td><td>${k.count || 0} sent</td><td>${esc(k.lastUsed ? ago(k.lastUsed) : 'never used')}</td>
+				<td><button type="button" data-kact="rotate">Rotate</button> <button type="button" data-kact="${k.disabled ? 'enable' : 'disable'}">${k.disabled ? 'Turn on' : 'Turn off'}</button> <button type="button" data-kact="revoke" class="danger">Revoke</button></td></tr>`);
+			tr.addEventListener('click', (e) => {
+				const b = e.target.closest('[data-kact]');
+				if (b) {
+					keyAction(b.dataset.kact, k).catch((err) => alert(err.message));
+				}
+			});
+			return tr;
+		});
+		box.replaceChildren(el('<tr><th>Name</th><th>Reports</th><th>Last used</th><th></th></tr>'), ...rows);
+		if (!r.keys.length) {
+			box.append(el(`<tr><td colspan="4" class="none">No keys yet. A build sends reports to <code>${esc(r.url)}</code>, up to ${Math.round(r.maxBytes / 1024)} KB each.</td></tr>`));
+		}
+	} catch (e) {
+		box.replaceChildren(el(`<tr><td class="none">${esc(e.message)}</td></tr>`));
+	}
+}
+
+function showNewKey(k) {
+	const box = $('#new-key');
+	box.replaceChildren(el('<div>Copy it now; it is never shown again. It belongs in the build’s environment or your secret store, not in the repo.</div>'),
+		el(`<code>${esc(k.key)}</code>`),
+		el(`<div class="hint">It can only add reports to this project: <code>POST ${esc(k.url)}</code> with <code>Authorization: Bearer &lt;key&gt;</code>.</div>`));
+	box.hidden = false;
+}
+
+async function keyAction(act, k) {
+	if (act === 'rotate') {
+		if (confirm(`Rotate "${k.name}"? Whatever is sending with the old key stops working at once.`)) {
+			const made = await api('POST', P(`/keys/${encodeURIComponent(k.id)}/rotate`), {});
+			await renderKeys();
+			showNewKey(made);
+		}
+	} else if (act === 'revoke') {
+		if (confirm(`Revoke "${k.name}"? It can never be used again.`)) {
+			await api('DELETE', P(`/keys/${encodeURIComponent(k.id)}`));
+			await renderKeys();
+		}
+	} else if (act === 'disable' || act === 'enable') {
+		await api('PATCH', P(`/keys/${encodeURIComponent(k.id)}`), { disabled: act === 'disable' });
+		await renderKeys();
+	}
+}
+
+$('#make-key').addEventListener('click', async () => {
+	try {
+		const made = await api('POST', P('/keys'), { name: $('#key-name').value.trim() || undefined });
+		$('#key-name').value = '';
+		await renderKeys();
+		showNewKey(made);
+	} catch (e) {
+		alert(e.message);
 	}
 });
 

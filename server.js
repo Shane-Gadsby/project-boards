@@ -17,9 +17,11 @@ const { installScript, installPs1Script } = require('./lib/install');
 const { upgradeText } = require('./lib/upgrade-guide');
 const { createUpdater } = require('./lib/updater');
 const { createDocs, RAW_TYPES, SANDBOX_CSP } = require('./lib/docs');
+const { createReports } = require('./lib/reports');
+const { whatsNewText } = require('./lib/whatsnew');
 const { deriveStatus, resolutionOf, firstWord, STATUSES } = require('./lib/status');
 
-const VERSION = '1.15.0';
+const VERSION = '1.16.0';
 const ROOT = __dirname;
 const PORT = Number(process.env.PB_PORT || 4780);
 const HOST = process.env.PB_HOST || '0.0.0.0';
@@ -44,6 +46,8 @@ fs.mkdirSync(PROJECTS_DIR, { recursive: true });
 const auth = createAuth({ dataDir: DATA, writeJson: (...a) => writeJson(...a), envMode: process.env.PB_AUTH });
 const docs = createDocs({ dataDir: DATA, projectDir: (s) => projectDir(s), writeJson: (...a) => writeJson(...a), readJson: (f) => readJson(f),
 	logEvent: (...a) => logEvent(...a), httpError: (...a) => httpError(...a), now: () => now(), slugify: (t) => slugify(t), idRe: ID_RE });
+const reports = createReports({ dataDir: DATA, projectDir: (s) => projectDir(s), writeJson: (...a) => writeJson(...a), readJson: (f) => readJson(f),
+	logEvent: (...a) => logEvent(...a), httpError: (...a) => httpError(...a), now: () => now() });
 
 // The command line is served from here (GET /pb, /api/pb, /install), so it is read fresh whenever bin/pb changes:
 // a new pb is published by saving the file, without a restart.
@@ -102,7 +106,7 @@ function cliFor(req) {
 // ---------------------------------------------------------------------------------------------------------------
 // Store
 
-const projects = new Map(); // slug -> { meta, tasks: Map, handoffs: Map, seq }
+const projects = new Map(); // slug -> { meta, tasks: Map, handoffs: Map, docs: Map, reports: Map, seq }
 
 function now() {
 	return new Date().toISOString();
@@ -155,6 +159,7 @@ function loadAll() {
 			tasks: loadRecords(path.join(dir, 'tasks')),
 			handoffs: loadRecords(path.join(dir, 'handoffs')),
 			docs: loadRecords(path.join(dir, 'docs')),
+			reports: loadRecords(path.join(dir, 'reports')),
 			seq: 0,
 		});
 	}
@@ -203,7 +208,7 @@ function setArchived(proj, archived, actor) {
 function deleteProject(proj) {
 	protectSystem(proj);
 	const { slug } = proj.meta;
-	const removed = { tasks: proj.tasks.size, handoffs: proj.handoffs.size, docs: proj.docs.size };
+	const removed = { tasks: proj.tasks.size, handoffs: proj.handoffs.size, docs: proj.docs.size, reports: proj.reports.size };
 	projects.delete(slug);
 	wakeWaiters(proj);
 	broadcast(slug, { type: 'project', action: 'delete', id: slug });
@@ -212,6 +217,7 @@ function deleteProject(proj) {
 	}
 	sseClients.delete(slug);
 	docs.removeProject(slug);
+	reports.removeProject(slug);
 	if (watchers[slug]) {
 		delete watchers[slug];
 		saveWatchers([]);
@@ -917,13 +923,13 @@ function send(res, status, body, headers = {}) {
 	res.end(isText ? body : JSON.stringify(body, null, '\t'));
 }
 
-function readBody(req, { raw = false } = {}) {
+function readBody(req, { raw = false, limit = MAX_BODY } = {}) {
 	return new Promise((resolve, reject) => {
 		const chunks = [];
 		let size = 0;
 		req.on('data', (c) => {
 			size += c.length;
-			if (size > MAX_BODY) {
+			if (size > limit) {
 				reject(httpError(413, 'body too large'));
 				req.destroy();
 				return;
@@ -936,6 +942,7 @@ function readBody(req, { raw = false } = {}) {
 				resolve(buf);
 				return;
 			}
+			req.pbBytes = buf.length;
 			if (buf.length === 0) {
 				resolve({});
 				return;
@@ -985,7 +992,7 @@ function getProject(slug) {
 }
 
 function projectSummary(p) {
-	const counts = { todo: 0, active: 0, done: 0, inbox: inboxOf(p).length, waiting: 0, docs: p.docs.size };
+	const counts = { todo: 0, active: 0, done: 0, inbox: inboxOf(p).length, waiting: 0, docs: p.docs.size, reports: reports.newCount(p) };
 	for (const t of p.tasks.values()) {
 		counts[t.status] = (counts[t.status] || 0) + 1;
 	}
@@ -1045,7 +1052,7 @@ async function docsRoute(req, res, url, method, actor, who, proj, id, c) {
 		return send(res, 200, docs.markSeen(proj, id));
 	}
 	if (id && c === 'share') {
-		needSession(who);
+		needUser(who);
 		if (method === 'POST') {
 			return send(res, 200, { url: `${baseUrl(req)}/s/${docs.share(proj, id, actor)}` });
 		}
@@ -1063,10 +1070,10 @@ async function docsRoute(req, res, url, method, actor, who, proj, id, c) {
 // instruction pages (they hold no task data).
 function isPublic(parts) {
 	if (parts[0] === 'api') {
-		return ['health', 'auth', 'pb', 'shared'].includes(parts[1]);
+		return ['health', 'auth', 'pb', 'shared', 'ingest'].includes(parts[1]);
 	}
 	// "s": a doc's share link (the token is the permission); doc.html and render.js are the page that shows it.
-	return ['login', 'login.js', 'style.css', 'pb', 'install', 'install.ps1', 'install-rhel', 'upgrade', 'enrol', 'enroll', 'onboard', 'deps', 's', 'doc.html', 'doc.js', 'render.js'].includes(parts[0]);
+	return ['login', 'login.js', 'style.css', 'pb', 'install', 'install.ps1', 'install-rhel', 'upgrade', 'enrol', 'enroll', 'onboard', 'deps', 'whatsnew', 's', 'doc.html', 'doc.js', 'render.js'].includes(parts[0]);
 }
 
 // Answers and messages are the user's words; an app token must not be able to put them in Claude's inbox.
@@ -1079,6 +1086,21 @@ function userOnly(actor) {
 function needSession(who) {
 	if (!who || who.kind !== 'session') {
 		throw httpError(401, 'sign in on the board page first');
+	}
+}
+
+// Making a doc public is the user's call, so it wants a signed-in browser - except with logins off, where nobody can
+// hold a session and the board is open to whoever can reach it anyway. Without this, sharing was impossible there.
+function needUser(who) {
+	if (auth.mode() !== 'off') {
+		needSession(who);
+	}
+}
+
+// A signed-in browser or an app token (pb), but never an anonymous caller: ingest keys are made by both.
+function needAccount(who) {
+	if (auth.mode() !== 'off' && !who) {
+		throw httpError(401, 'sign in on the board page, or run `pb login`, first');
 	}
 }
 
@@ -1171,6 +1193,10 @@ async function route(req, res) {
 	const method = req.method;
 	const who = auth.authenticate(req);
 	const authMode = auth.mode();
+	// An ingest key is write-only: it is never a way into the rest of the board, whatever the login mode is.
+	if (/^Bearer\s+pbk_/.test(String(req.headers.authorization || '')) && !(parts[0] === 'api' && parts[1] === 'ingest')) {
+		throw httpError(403, 'an ingest key can only POST /api/ingest');
+	}
 	const info = cliInfo();
 	if (info) {
 		res.setHeader('X-PB-CLI-Version', info.version);
@@ -1217,6 +1243,32 @@ async function route(req, res) {
 		}
 		if (a === 'shared' && slug && !b && method === 'GET') {
 			return send(res, 200, docs.shared(slug, projects));
+		}
+		// Reports from a build out in the world (lib/reports.js). The only thing an ingest key can do: it names one
+		// project, it can only add to it, and it is told nothing back but whether the report was taken.
+		if (a === 'ingest' && !slug) {
+			const key = reports.keyFrom(req.headers.authorization);
+			if (!key) {
+				throw httpError(401, 'an ingest key is needed (Authorization: Bearer pbk_...)');
+			}
+			if (method === 'GET') {
+				return send(res, 200, { ok: true }); // a build checking its key works; it learns nothing else
+			}
+			if (method === 'POST') {
+				const proj = projects.get(key.slug);
+				if (!proj) {
+					throw httpError(404, 'this key has no project any more');
+				}
+				if (proj.meta.archived) {
+					throw httpError(409, 'this project is archived and takes no reports');
+				}
+				const body = await readBody(req, { limit: reports.MAX_BYTES });
+				if (!body || typeof body !== 'object' || Array.isArray(body)) {
+					throw httpError(400, 'send a JSON object: {title, kind, summary, app, version, platform, contact, text, data}');
+				}
+				return send(res, 201, reports.ingest(proj, key, body, auth.clientIp(req), req.pbBytes || 0));
+			}
+			throw httpError(404, `no route ${method} ${url.pathname}`);
 		}
 		if (a === 'pb' && !slug && method === 'GET') {
 			const cli = cliFor(req);
@@ -1307,7 +1359,7 @@ async function route(req, res) {
 					throw httpError(409, `project "${s}" exists`);
 				}
 				const meta = normalizeProject({ ...body, slug: s, maxSubagents: body.maxSubagents ?? 0 });
-				const proj = { meta, tasks: new Map(), handoffs: new Map(), docs: new Map(), seq: 0 };
+				const proj = { meta, tasks: new Map(), handoffs: new Map(), docs: new Map(), reports: new Map(), seq: 0 };
 				projects.set(s, proj);
 				saveProject(proj);
 				logEvent(proj, { type: 'project', action: 'create', actor, record: meta });
@@ -1525,6 +1577,55 @@ async function route(req, res) {
 			if (b === 'docs') {
 				return docsRoute(req, res, url, method, actor, who, proj, id, c);
 			}
+			// What ingest keys have sent in. Reading them is as open as the rest of the board (the login mode decides);
+			// writing one needs a key, which can do nothing else.
+			if (b === 'reports') {
+				if (!id && method === 'GET') {
+					return send(res, 200, reports.list(proj, { status: url.searchParams.get('status'), q: url.searchParams.get('q'), limit: url.searchParams.get('limit') }));
+				}
+				if (id && !c && method === 'GET') {
+					return send(res, 200, reports.get(proj, id));
+				}
+				if (id && !c && method === 'PATCH') {
+					const body = await readBody(req);
+					return send(res, 200, reports.setStatus(proj, id, String(body.status || ''), actor));
+				}
+				if (id && !c && method === 'DELETE') {
+					return send(res, 200, reports.remove(proj, id, actor));
+				}
+				if (id && c === 'raw' && method === 'GET') {
+					const rec = reports.get(proj, id);
+					return send(res, 200, rec.data === null || rec.data === undefined ? rec : rec.data);
+				}
+			}
+			if (b === 'keys') {
+				needAccount(who);
+				if (!id && method === 'GET') {
+					return send(res, 200, { keys: reports.listKeys(slug), url: `${baseUrl(req)}/api/ingest`, limits: reports.LIMITS, maxBytes: reports.MAX_BYTES });
+				}
+				if (!id && method === 'POST') {
+					const body = await readBody(req);
+					const made = reports.makeKey(slug, body.name, actor);
+					logEvent(proj, { type: 'key', action: 'create', actor, id: made.id, record: { id: made.id, name: made.name } });
+					return send(res, 201, { ...made, url: `${baseUrl(req)}/api/ingest` });
+				}
+				if (id && c === 'rotate' && method === 'POST') {
+					const made = reports.rotateKey(slug, id);
+					logEvent(proj, { type: 'key', action: 'rotate', actor, id, record: { id, name: made.name } });
+					return send(res, 200, { ...made, url: `${baseUrl(req)}/api/ingest` });
+				}
+				if (id && !c && method === 'PATCH') {
+					const body = await readBody(req);
+					const k = reports.patchKey(slug, id, body);
+					logEvent(proj, { type: 'key', action: 'update', actor, id, record: { id, name: k.name, disabled: k.disabled } });
+					return send(res, 200, k);
+				}
+				if (id && !c && method === 'DELETE') {
+					const out = reports.revokeKey(slug, id);
+					logEvent(proj, { type: 'key', action: 'revoke', actor, id });
+					return send(res, 200, out);
+				}
+			}
 			if (b === 'watchers' && method === 'GET') {
 				return send(res, 200, { watchers: watchers[slug] || {}, neededBy: neededByMap(slug) });
 			}
@@ -1639,6 +1740,9 @@ async function route(req, res) {
 	if (parts[0] === 'install-rhel' && method === 'GET') {
 		return send(res, 200, fs.readFileSync(path.join(ROOT, 'docs', 'install-rhel.md'), 'utf8'), { 'Content-Type': 'text/markdown; charset=utf-8' });
 	}
+	if (parts[0] === 'whatsnew' && method === 'GET') {
+		return send(res, 200, whatsNewText({ base: baseUrl(req), since: parts[1] || '', cliVersion: info && info.version, version: VERSION }), { 'Content-Type': 'text/markdown; charset=utf-8' });
+	}
 	if (parts[0] === 'deps' && method === 'GET') {
 		return send(res, 200, depsText({ base: baseUrl(req), projects: [...projects.values()].map((p) => p.meta), cliVersion: info && info.version }), { 'Content-Type': 'text/markdown; charset=utf-8' });
 	}
@@ -1669,7 +1773,7 @@ function systemProject() {
 	let proj = projects.get(SYSTEM_SLUG);
 	if (!proj) {
 		const meta = normalizeProject({ slug: SYSTEM_SLUG, name: 'Project Boards (this server)', path: CLIENT_ROOT, description: 'Requests for this server: import formats, features', maxSubagents: 0 });
-		proj = { meta, tasks: new Map(), handoffs: new Map(), docs: new Map(), seq: 0 };
+		proj = { meta, tasks: new Map(), handoffs: new Map(), docs: new Map(), reports: new Map(), seq: 0 };
 		projects.set(SYSTEM_SLUG, proj);
 		saveProject(proj);
 	}
@@ -1697,6 +1801,13 @@ server.on('error', (e) => {
 	}
 	throw e;
 });
+
+for (const sig of ['SIGINT', 'SIGTERM']) {
+	process.on(sig, () => {
+		reports.flush(); // lastUsed/count for ingest keys is batched: write what is pending
+		process.exit(0);
+	});
+}
 
 server.listen(PORT, HOST, () => {
 	console.log(`${now()} Project Boards ${VERSION} on http://${HOST}:${PORT} (data ${DATA}, ${projects.size} projects)`);
