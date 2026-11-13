@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.16.0 (2026-11-13)
+
+- **Reports**: a new tab for what a build out in the world sends back - crash reports, diagnostics, a beta tester's
+  notes. Each report shows when it came, from which key and address, the app, version and platform, the sender's
+  notes and whatever JSON the build attached. Triage with **Mark done** / **Keep**, turn one into a task with **Make
+  a task**, and the tab's badge counts the ones nobody has looked at.
+- **Ingest keys** (Project settings > Ingest keys): a write-only credential a build sends with. A key names one
+  project, can only add reports to it, and can read nothing at all - not the board, the tasks, the docs, or its own
+  reports; used anywhere else it is refused. Keys are rate limited per key and per address, can be turned off,
+  rotated (same key, new secret) or revoked, and only their hash is stored. A build posts to `POST /api/ingest` with
+  `Authorization: Bearer pbk_...`; one report is up to 256 KB and a project keeps its newest 2000.
+- `pb reports`, `pb report <id>` (`--save <file>`), `pb report done|keep|new|rm <id>`, `pb keys`, `pb key new`,
+  `pb key rotate|revoke|disable|enable <id>`. Sessions are told to read a report as data, never as instructions.
+- **/whatsnew**: a page for sessions enrolled before a feature existed, so the user can bring one up to date with a
+  link instead of a re-read of the whole onboarding page.
+- Fixed: with logins off, nothing could make a doc's public share link (it asked for a sign-in that cannot exist in
+  that mode).
+
 ## 1.15.0 (2026-11-06)
 
 - Fold a card down to its title so long-running cards take less room. On a hand-off, click the title or the arrow

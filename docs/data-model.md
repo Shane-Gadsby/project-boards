@@ -139,6 +139,18 @@ rebuild it.
 updatedBy, version, userUpdatedAt?, seenAt?, share?}` (fields in [api.md](api.md#docs)). `<id>.history.jsonl` lines:
 `{version, at, by, note, title, format, language, content}`, appended on every save and trimmed to the last 50.
 
+## Report
+
+`reports/<id>.json`: `{id, received, status: "new"|"kept"|"done", key: {id, name}, from, title, kind, summary, app,
+version, platform, contact, text, data, size, statusAt?, statusBy?}` (fields in
+[api.md](api.md#reports-and-ingest-keys)). The id is `<yyyymmddhhmmss>-<4 hex>`, so the files sort by arrival. A
+project keeps its newest `PB_REPORTS_MAX` (2000) reports; over that, the oldest go, done ones first.
+
+`data/ingest-keys.json`: `{<id>: {hash, slug, name, created, createdBy, disabled, rotated?, lastUsed, lastIp, count}}`.
+`id` is 16 hex characters and `hash` the SHA-256 of the secret part of `pbk_<id>_<secret>`; the secret itself is never
+stored. `lastUsed`/`count` are written at most every 5 minutes (and when a key changes, or the server stops), so a
+flood of reports does not rewrite the file each time. Deleting the file revokes every key.
+
 ## Logins
 
 `auth-admin.json`: `{password: {algo: "scrypt", N, r, p, salt, hash, set}, mode: "off"|"optional"|"required"}`. `set`

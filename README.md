@@ -8,6 +8,7 @@ your answers from it.
 |---|---|
 | **Tasks** tab | Every task of the selected project in three columns: Not started, Being worked on, Complete. |
 | **Docs** tab | The project's documents (specs, reports, diagrams, HTML pages, data): Claude writes them with `pb doc put`, you read, edit, present and share them. |
+| **Reports** tab | What a build out in the world sends back (crashes, diagnostics, testers' notes). Builds send with an ingest key: write-only, one project, reads nothing. |
 | **Hand-offs** tab | What a session needs from you: decisions with a default, typed answers, screenshots and videos to judge, hands-on test steps, and a box to message Claude. Your answers wait in the project's inbox until Claude acknowledges them. |
 | **Project dropdown** | Switch projects; **+ Add a project...** registers one. |
 | **Gear** | The project's settings, including **sub-agents allowed at once** (0-10, default 0). |

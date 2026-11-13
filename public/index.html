@@ -15,6 +15,7 @@
 		<button class="tab" data-tab="handoffs" role="tab">Hand-offs <span class="badge" id="badge-handoffs"></span></button>
 		<button class="tab" data-tab="tasks" role="tab">Tasks <span class="badge muted" id="badge-tasks"></span></button>
 		<button class="tab" data-tab="docs" role="tab">Docs <span class="badge muted" id="badge-docs"></span></button>
+		<button class="tab" data-tab="reports" role="tab">Reports <span class="badge" id="badge-reports"></span></button>
 	</nav>
 	<div class="spacer"></div>
 	<span class="agents" id="agents" title="Sub-agents this project may run at once"></span>
@@ -70,6 +71,23 @@
 			<div id="doc-pane" class="doc-pane"></div>
 		</div>
 	</section>
+	<section id="tab-reports" class="tabpane" hidden>
+		<div class="docs-layout">
+			<aside class="docs-side">
+				<div class="docs-toolbar">
+					<input id="report-filter" class="filter" placeholder="Filter reports (title, app, version, platform)">
+					<select id="report-status" aria-label="Which reports">
+						<option value="">All</option>
+						<option value="new">New</option>
+						<option value="kept">Kept</option>
+						<option value="done">Done</option>
+					</select>
+				</div>
+				<div id="report-list" class="doc-list"></div>
+			</aside>
+			<div id="report-pane" class="doc-pane"></div>
+		</div>
+	</section>
 	<section id="empty" class="empty" hidden></section>
 </main>
 
@@ -95,6 +113,15 @@
 			<code id="onboard-url"></code> <button type="button" id="copy-onboard">Copy</button>
 			<div class="enrol-row">Enrol a new project from scratch:</div>
 			<code class="enrol-url"></code> <button type="button" class="copy-enrol">Copy</button>
+		</div>
+		<div class="keys-section">
+			<h3 class="section-title">Ingest keys</h3>
+			<p class="hint">A key lets one build out in the world send reports to this project and do nothing else: it cannot
+				read the board, the tasks, the docs or even its own reports. Reports arrive on the <strong>Reports</strong> tab.
+				The key is shown once when it is made; if it is lost or leaked, rotate it.</p>
+			<div class="access-table-wrap"><table class="access-table" id="keys-table"></table></div>
+			<div class="access-row"><input id="key-name" placeholder="What is sending (e.g. Frameling beta)"><button type="button" id="make-key">Make a key</button></div>
+			<div class="new-token" id="new-key" hidden></div>
 		</div>
 		<div class="danger-zone" id="danger-zone">
 			<div><button type="button" id="archive-project">Archive project</button> <small>Hides it and makes it read-only. You can restore it.</small></div>

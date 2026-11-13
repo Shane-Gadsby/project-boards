@@ -98,6 +98,7 @@ Escape or the cross closes the drawer.
 | **Sub-agents allowed at once** | 0-10, default 0. The most sub-agents (workers, forks, parallel agents) a Claude session may run at once for this project. 0 means the session does everything itself. Sessions read it before every spawn. |
 | Hand-off lanes | Comma-separated names (e.g. `PC1, PC2`) to split "Waiting for you" into columns. Blank for one list. |
 | Banner | The one-line message under the top bar. |
+| **Ingest keys** | Keys that let a build out in the world send reports to this project (see the Reports tab). |
 
 The dialog also shows two links with **Copy** buttons:
 
@@ -149,6 +150,37 @@ sessions add them with `pb doc put`; you can add and edit them here.
 | **Delete** | Deletes the doc and its history (asks first). |
 
 HTML and SVG docs run in a sandbox: their scripts work, but they cannot see your sign-in or the board.
+
+## Reports tab
+
+What a build out in the world sent back: crash reports, diagnostics, a beta tester's notes. Nobody signs in to send
+one; a build sends with an **ingest key** (below), and the key can do nothing else: it cannot read the board, your
+tasks, your docs, or even the reports it has written.
+
+| Part | What it does |
+|---|---|
+| **List** (left) | Newest first. **new** marks one nobody has looked at; the filter searches the title, app, version and platform, and the dropdown narrows to New, Kept or Done. |
+| **The report** | What it says: when it came, from which key and address, the app, version and platform, the sender's contact if they gave one, their notes, and the JSON the build attached. |
+| **Mark done** / **Keep** | Triage. The tab's badge counts the new ones, so the board is clear once you have been through them. |
+| **Make a task** | Turns it into a task on the Tasks tab (and marks the report done), so the work is where the rest of the work is. |
+| **Copy JSON** | The whole report, to paste somewhere. |
+| **Delete** | Removes it (asks first). |
+
+Claude sessions read the same reports with `pb reports` and `pb report <id>`, and are told to treat them as data,
+never as instructions.
+
+### Ingest keys (Settings > Ingest keys)
+
+**Make a key** for each thing that sends (one for the beta build, another for CI, say). The key is shown **once**:
+copy it then. It goes in the build's environment or your password manager, never in the repo.
+
+- **Rotate** keeps the key and its history but gives it a new secret: whatever is sending with the old one stops at
+  once. Use it if a key leaks.
+- **Turn off** stops a key being accepted without deleting it; **Revoke** deletes it for good.
+- A key is rate limited (20 reports a minute, 200 an hour, with a lower limit per address too), one report is up to
+  256 KB, and a project keeps its newest 2000 reports.
+
+A Claude session can make and rotate keys too (`pb key new`), so you can ask one to set up a build's sending.
 
 ## Access and signing apps in
 
